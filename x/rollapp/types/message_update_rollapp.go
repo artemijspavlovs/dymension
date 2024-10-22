@@ -2,6 +2,7 @@ package types
 
 import (
 	"errors"
+	fmt "fmt"
 
 	errorsmod "cosmossdk.io/errors"
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -17,7 +18,7 @@ func NewMsgUpdateRollappInformation(
 	rollappId,
 	initSequencer string,
 	metadata *RollappMetadata,
-	genesisInfo GenesisInfo,
+	genesisInfo *GenesisInfo,
 ) *MsgUpdateRollappInformation {
 	return &MsgUpdateRollappInformation{
 		Owner:            creator,
@@ -50,26 +51,46 @@ func (msg *MsgUpdateRollappInformation) GetSignBytes() []byte {
 }
 
 func (msg *MsgUpdateRollappInformation) ValidateBasic() error {
+	_, err := sdk.AccAddressFromBech32(msg.Owner)
+	if err != nil {
+		return errors.Join(ErrInvalidCreatorAddress, err)
+	}
+
 	if msg.InitialSequencer != "" && msg.InitialSequencer != "*" {
 		_, err := sdk.AccAddressFromBech32(msg.InitialSequencer)
 		if err != nil {
-			return errorsmod.Wrap(ErrInvalidInitialSequencer, err.Error())
+			return errors.Join(ErrInvalidInitialSequencer, err)
 		}
 	}
 
-	if len(msg.GenesisInfo.GenesisChecksum) > maxGenesisChecksumLength {
-		return ErrInvalidGenesisChecksum
-	}
+	if msg.GenesisInfo != nil {
+		if len(msg.GenesisInfo.GenesisChecksum) > maxGenesisChecksumLength {
+			return ErrInvalidGenesisChecksum
+		}
 
-	if msg.GenesisInfo.Bech32Prefix != "" {
-		if err := validateBech32Prefix(msg.GenesisInfo.Bech32Prefix); err != nil {
-			return errorsmod.Wrap(errors.Join(err, gerrc.ErrInvalidArgument), "bech32 prefix")
+		if msg.GenesisInfo.Bech32Prefix != "" {
+			if err := validateBech32Prefix(msg.GenesisInfo.Bech32Prefix); err != nil {
+				return errorsmod.Wrap(errors.Join(gerrc.ErrInvalidArgument, err), "bech32 prefix")
+			}
+		}
+
+		if msg.GenesisInfo.GenesisAccounts != nil {
+			// validate max limit of genesis accounts
+			if len(msg.GenesisInfo.GenesisAccounts.Accounts) > maxAllowedGenesisAccounts {
+				return fmt.Errorf("too many genesis accounts: %d", len(msg.GenesisInfo.GenesisAccounts.Accounts))
+			}
+
+			for _, acc := range msg.GenesisInfo.GenesisAccounts.Accounts {
+				if err := acc.ValidateBasic(); err != nil {
+					return errorsmod.Wrapf(errors.Join(gerrc.ErrInvalidArgument, err), "genesis account: %v", acc)
+				}
+			}
 		}
 	}
 
 	if msg.Metadata != nil {
 		if err := msg.Metadata.Validate(); err != nil {
-			return errorsmod.Wrap(ErrInvalidMetadata, err.Error())
+			return errors.Join(ErrInvalidMetadata, err)
 		}
 	}
 
@@ -81,8 +102,12 @@ func (msg *MsgUpdateRollappInformation) UpdatingImmutableValues() bool {
 }
 
 func (msg *MsgUpdateRollappInformation) UpdatingGenesisInfo() bool {
+	if msg.GenesisInfo == nil {
+		return false
+	}
 	return msg.GenesisInfo.GenesisChecksum != "" ||
 		msg.GenesisInfo.Bech32Prefix != "" ||
-		msg.GenesisInfo.NativeDenom != nil ||
-		!msg.GenesisInfo.InitialSupply.IsNil()
+		msg.GenesisInfo.NativeDenom.Base != "" ||
+		!msg.GenesisInfo.InitialSupply.IsNil() ||
+		msg.GenesisInfo.GenesisAccounts != nil
 }

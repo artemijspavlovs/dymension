@@ -30,6 +30,8 @@ import (
 	"github.com/cosmos/cosmos-sdk/x/gov"
 	"github.com/cosmos/cosmos-sdk/x/gov/client"
 	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
+	grouptypes "github.com/cosmos/cosmos-sdk/x/group"
+	groupmodule "github.com/cosmos/cosmos-sdk/x/group/module"
 	"github.com/cosmos/cosmos-sdk/x/mint"
 	minttypes "github.com/cosmos/cosmos-sdk/x/mint/types"
 	"github.com/cosmos/cosmos-sdk/x/params"
@@ -91,10 +93,11 @@ import (
 	"github.com/dymensionxyz/dymension/v3/x/eibc"
 	eibcmoduletypes "github.com/dymensionxyz/dymension/v3/x/eibc/types"
 	incentivestypes "github.com/dymensionxyz/dymension/v3/x/incentives/types"
-	"github.com/dymensionxyz/dymension/v3/x/rollapp"
-
+	"github.com/dymensionxyz/dymension/v3/x/iro"
+	irotypes "github.com/dymensionxyz/dymension/v3/x/iro/types"
 	lightclientmodule "github.com/dymensionxyz/dymension/v3/x/lightclient"
 	lightclientmoduletypes "github.com/dymensionxyz/dymension/v3/x/lightclient/types"
+	"github.com/dymensionxyz/dymension/v3/x/rollapp"
 	rollappmoduleclient "github.com/dymensionxyz/dymension/v3/x/rollapp/client"
 	rollappmoduletypes "github.com/dymensionxyz/dymension/v3/x/rollapp/types"
 	"github.com/dymensionxyz/dymension/v3/x/sequencer"
@@ -150,10 +153,12 @@ var ModuleBasics = module.NewBasicManager(
 	streamer.AppModuleBasic{},
 	denommetadata.AppModuleBasic{},
 	packetforward.AppModuleBasic{},
+	iro.AppModuleBasic{},
 	delayedack.AppModuleBasic{},
 	eibc.AppModuleBasic{},
 	dymnsmodule.AppModuleBasic{},
 	lightclientmodule.AppModuleBasic{},
+	groupmodule.AppModuleBasic{},
 
 	// Ethermint modules
 	evm.AppModuleBasic{},
@@ -199,14 +204,16 @@ func (a *AppKeepers) SetupModules(
 		packetforwardmiddleware.NewAppModule(a.PacketForwardMiddlewareKeeper, a.GetSubspace(packetforwardtypes.ModuleName)),
 		ibctransfer.NewAppModule(a.TransferKeeper),
 		rollappmodule.NewAppModule(appCodec, a.RollappKeeper, a.AccountKeeper, a.BankKeeper),
+		iro.NewAppModule(appCodec, *a.IROKeeper),
 		sequencermodule.NewAppModule(appCodec, a.SequencerKeeper, a.AccountKeeper, a.BankKeeper, a.GetSubspace(sequencertypes.ModuleName)),
 		sponsorship.NewAppModule(a.SponsorshipKeeper),
 		streamermodule.NewAppModule(a.StreamerKeeper, a.AccountKeeper, a.BankKeeper, a.EpochsKeeper),
-		delayedackmodule.NewAppModule(appCodec, a.DelayedAckKeeper),
+		delayedackmodule.NewAppModule(appCodec, a.DelayedAckKeeper, a.delayedAckMiddleware),
 		denommetadatamodule.NewAppModule(a.DenomMetadataKeeper, *a.EvmKeeper, a.BankKeeper),
 		eibcmodule.NewAppModule(appCodec, a.EIBCKeeper, a.AccountKeeper, a.BankKeeper),
 		dymnsmodule.NewAppModule(appCodec, a.DymNSKeeper),
 		lightclientmodule.NewAppModule(appCodec, a.LightClientKeeper),
+		groupmodule.NewAppModule(appCodec, a.GroupKeeper, a.AccountKeeper, a.BankKeeper, encodingConfig.InterfaceRegistry),
 
 		// Ethermint app modules
 		evm.NewAppModule(a.EvmKeeper, a.AccountKeeper, a.BankKeeper, a.GetSubspace(evmtypes.ModuleName).WithKeyTable(evmtypes.ParamKeyTable())),
@@ -232,6 +239,7 @@ func (*AppKeepers) ModuleAccountAddrs() map[string]bool {
 	// exclude the streamer as we want him to be able to get external incentives
 	modAccAddrs[authtypes.NewModuleAddress(streamermoduletypes.ModuleName).String()] = false
 	modAccAddrs[authtypes.NewModuleAddress(txfeestypes.ModuleName).String()] = false
+	modAccAddrs[authtypes.NewModuleAddress(irotypes.ModuleName).String()] = false
 	return modAccAddrs
 }
 
@@ -250,11 +258,13 @@ var maccPerms = map[string][]string{
 	streamermoduletypes.ModuleName:                     nil,
 	evmtypes.ModuleName:                                {authtypes.Minter, authtypes.Burner}, // used for secure addition and subtraction of balance using module account.
 	evmtypes.ModuleVirtualFrontierContractDeployerName: nil,                                  // used for deploying virtual frontier bank contract.
+	grouptypes.ModuleName:                              nil,
 	gammtypes.ModuleName:                               {authtypes.Minter, authtypes.Burner},
 	lockuptypes.ModuleName:                             {authtypes.Minter, authtypes.Burner},
 	incentivestypes.ModuleName:                         {authtypes.Minter, authtypes.Burner},
 	txfeestypes.ModuleName:                             {authtypes.Burner},
 	dymnstypes.ModuleName:                              {authtypes.Minter, authtypes.Burner},
+	irotypes.ModuleName:                                {authtypes.Minter, authtypes.Burner},
 }
 
 var BeginBlockers = []string{
@@ -294,7 +304,9 @@ var BeginBlockers = []string{
 	incentivestypes.ModuleName,
 	txfeestypes.ModuleName,
 	consensusparamtypes.ModuleName,
+	irotypes.ModuleName,
 	lightclientmoduletypes.ModuleName,
+	grouptypes.ModuleName,
 }
 
 var EndBlockers = []string{
@@ -333,8 +345,10 @@ var EndBlockers = []string{
 	incentivestypes.ModuleName,
 	txfeestypes.ModuleName,
 	consensusparamtypes.ModuleName,
+	irotypes.ModuleName,
 	lightclientmoduletypes.ModuleName,
 	crisistypes.ModuleName,
+	grouptypes.ModuleName,
 }
 
 var InitGenesis = []string{
@@ -373,6 +387,8 @@ var InitGenesis = []string{
 	incentivestypes.ModuleName,
 	txfeestypes.ModuleName,
 	consensusparamtypes.ModuleName,
+	irotypes.ModuleName,
 	lightclientmoduletypes.ModuleName,
 	crisistypes.ModuleName,
+	grouptypes.ModuleName,
 }

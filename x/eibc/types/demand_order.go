@@ -2,6 +2,7 @@ package types
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 
 	"cosmossdk.io/math"
@@ -16,7 +17,7 @@ import (
 // Price is the cost to a market maker to buy the option, (recipient receives straight away).
 // Fee is what the market maker gets in return.
 func NewDemandOrder(rollappPacket commontypes.RollappPacket, price, fee math.Int, denom, recipient string) *DemandOrder {
-	rollappPacketKey := commontypes.RollappPacketKey(&rollappPacket)
+	rollappPacketKey := rollappPacket.RollappPacketKey()
 	return &DemandOrder{
 		Id:                   BuildDemandIDFromPacketKey(string(rollappPacketKey)),
 		TrackingPacketKey:    string(rollappPacketKey),
@@ -70,17 +71,19 @@ func (m *DemandOrder) Validate() error {
 	return nil
 }
 
-func (m *DemandOrder) GetCreatedEvent() *EventDemandOrderCreated {
+func (m *DemandOrder) GetCreatedEvent(proofHeight uint64) *EventDemandOrderCreated {
+	packetKey := base64.StdEncoding.EncodeToString([]byte(m.TrackingPacketKey))
 	return &EventDemandOrderCreated{
 		OrderId:      m.Id,
 		Price:        m.Price.String(),
 		Fee:          m.Fee.String(),
 		IsFulfilled:  m.IsFulfilled(),
 		PacketStatus: m.TrackingPacketStatus.String(),
-		PacketKey:    m.TrackingPacketKey,
+		PacketKey:    packetKey,
 		RollappId:    m.RollappId,
 		Recipient:    m.Recipient,
 		PacketType:   m.Type.String(),
+		ProofHeight:  proofHeight,
 	}
 }
 

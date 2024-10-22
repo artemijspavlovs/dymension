@@ -2,9 +2,11 @@ package keeper
 
 import (
 	"context"
+	"fmt"
 
 	errorsmod "cosmossdk.io/errors"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/dymensionxyz/gerr-cosmos/gerrc"
 
 	"github.com/dymensionxyz/dymension/v3/x/rollapp/types"
 )
@@ -18,13 +20,33 @@ func (k msgServer) UpdateState(goCtx context.Context, msg *types.MsgUpdateState)
 		return nil, types.ErrUnknownRollappID
 	}
 
+	// verify the rollapp is not frozen
+	if rollapp.Frozen {
+		return nil, errorsmod.Wrap(gerrc.ErrFailedPrecondition, "rollapp is frozen")
+	}
+
 	// call the before-update-state hook
 	// currently used by `x/sequencer` to:
 	// 1. validate the state update submitter
 	// 2. complete the rotation of the proposer if needed
 	err := k.hooks.BeforeUpdateState(ctx, msg.Creator, msg.RollappId, msg.Last)
 	if err != nil {
-		return nil, err
+		return nil, errorsmod.Wrap(err, "before update state")
+	}
+
+	for _, bd := range msg.BDs.BD {
+		// verify the DRS version is not vulnerable
+		if k.IsDRSVersionVulnerable(ctx, bd.DrsVersion) {
+			// the rollapp is not marked as vulnerable yet, mark it now
+			err := k.MarkRollappAsVulnerable(ctx, msg.RollappId)
+			if err != nil {
+				return nil, fmt.Errorf("mark rollapp vulnerable: %w", err)
+			}
+			k.Logger(ctx).With("rollapp_id", msg.RollappId, "drs_version", bd.DrsVersion).
+				Info("non-frozen rollapp tried to submit MsgUpdateState with the vulnerable DRS version, mark the rollapp as vulnerable")
+			// we must return non-error if we want the changes to be saved
+			return &types.MsgUpdateStateResponse{}, nil
+		}
 	}
 
 	// retrieve last updating index

@@ -7,7 +7,10 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 )
 
-const TypeMsgUpdateState = "update_state"
+const (
+	TypeMsgUpdateState = "update_state"
+	DRSVersionLength   = 40
+)
 
 var _ sdk.Msg = &MsgUpdateState{}
 
@@ -70,6 +73,12 @@ func (msg *MsgUpdateState) ValidateBasic() error {
 
 	// check that the blocks are sequential by height
 	for bdIndex := uint64(0); bdIndex < msg.NumBlocks; bdIndex += 1 {
+
+		// TODO: by now DRS version can be empty, but it will be deprecated
+		//  https://github.com/dymensionxyz/dymension/issues/1233
+		if msg.BDs.BD[bdIndex].DrsVersion != "" && len(msg.BDs.BD[bdIndex].DrsVersion) != DRSVersionLength {
+			return ErrInvalidDRSVersion
+		}
 		if msg.BDs.BD[bdIndex].Height != msg.StartHeight+bdIndex {
 			return ErrInvalidBlockSequence
 		}

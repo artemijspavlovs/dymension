@@ -7,6 +7,7 @@ import "cosmos/msg/v1/msg.proto";
 import "dymensionxyz/dymension/rollapp/block_descriptor.proto";
 import "dymensionxyz/dymension/rollapp/rollapp.proto";
 import "dymensionxyz/dymension/rollapp/metadata.proto";
+import "dymensionxyz/dymension/rollapp/genesis_info.proto";
 import "gogoproto/gogo.proto";
 
 // Msg defines the Msg service.
@@ -18,6 +19,7 @@ service Msg {
   rpc AddApp(MsgAddApp) returns (MsgAddAppResponse);
   rpc UpdateApp(MsgUpdateApp) returns (MsgUpdateAppResponse);
   rpc RemoveApp(MsgRemoveApp) returns (MsgRemoveAppResponse);
+  rpc MarkVulnerableRollapps(MsgMarkVulnerableRollapps) returns (MsgMarkVulnerableRollappsResponse);
 }
 
 // MsgCreateRollapp creates a new rollapp chain on the hub.
@@ -37,7 +39,7 @@ message MsgCreateRollapp {
   // metadata is the rollapp metadata
   RollappMetadata metadata = 13;
   // genesis_info is the genesis information
-  GenesisInfo genesis_info = 14 [(gogoproto.nullable) = false ];
+  GenesisInfo genesis_info = 14 [(gogoproto.nullable) = true ];
   // vm_type is the type of rollapp machine: EVM or WASM
   Rollapp.VMType vm_type = 15;
 }
@@ -59,7 +61,7 @@ message MsgUpdateRollappInformation {
   // metadata is the rollapp metadata
   RollappMetadata metadata = 5 [(gogoproto.nullable) = true ];
   // genesis_info is the genesis information
-  GenesisInfo genesis_info = 6 [(gogoproto.nullable) = false ];
+  GenesisInfo genesis_info = 6 [(gogoproto.nullable) = true ];
 }
 
 message MsgUpdateRollappInformationResponse {
@@ -165,3 +167,16 @@ message MsgRemoveApp {
 
 message MsgRemoveAppResponse {
 }
+
+// MsgMarkVulnerableRollapps marks specified versions as vulnerable as well as
+// all corresponding rollapps. Must be called by the governance.
+message MsgMarkVulnerableRollapps {
+  option (cosmos.msg.v1.signer) = "authority";
+
+  // Authority is the authority address.
+  string authority = 1;
+  // DrsVersions is a list of DRS versions that will be marked vulnerable.
+  repeated string drs_versions = 2;
+}
+
+message MsgMarkVulnerableRollappsResponse {}

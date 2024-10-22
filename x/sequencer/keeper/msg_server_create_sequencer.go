@@ -2,6 +2,7 @@ package keeper
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strconv"
 	"strings"
@@ -27,7 +28,7 @@ func (k msgServer) CreateSequencer(goCtx context.Context, msg *types.MsgCreateSe
 	}
 
 	if err := msg.VMSpecificValidate(rollapp.VmType); err != nil {
-		return nil, errorsmod.Wrapf(types.ErrInvalidRequest, err.Error())
+		return nil, errors.Join(types.ErrInvalidRequest, err)
 	}
 
 	// check to see if the sequencer has been registered before
@@ -50,33 +51,34 @@ func (k msgServer) CreateSequencer(goCtx context.Context, msg *types.MsgCreateSe
 		if !isInitialOrAllAllowed {
 			return nil, types.ErrNotInitialSequencer
 		}
-		if err := k.rollappKeeper.SealRollapp(ctx, msg.RollappId); err != nil {
+
+		// check pre launch time.
+		// skipped if no pre launch time is set
+		if rollapp.PreLaunchTime != nil && rollapp.PreLaunchTime.After(ctx.BlockTime()) {
+			return nil, types.ErrBeforePreLaunchTime
+		}
+
+		if err := k.rollappKeeper.SetRollappAsLaunched(ctx, &rollapp); err != nil {
 			return nil, err
 		}
 	}
 
-	bond := sdk.Coins{}
-	if minBond := k.GetParams(ctx).MinBond; !(minBond.IsNil() || minBond.IsZero()) {
-		if msg.Bond.Denom != minBond.Denom {
-			return nil, errorsmod.Wrapf(
-				types.ErrInvalidCoinDenom, "got %s, expected %s", msg.Bond.Denom, minBond.Denom,
-			)
-		}
-
-		if msg.Bond.Amount.LT(minBond.Amount) {
-			return nil, errorsmod.Wrapf(
-				types.ErrInsufficientBond, "got %s, expected %s", msg.Bond.Amount, minBond,
-			)
-		}
-
-		seqAcc := sdk.MustAccAddressFromBech32(msg.Creator)
-		err := k.bankKeeper.SendCoinsFromAccountToModule(ctx, seqAcc, types.ModuleName, sdk.NewCoins(msg.Bond))
-		if err != nil {
-			return nil, err
-		}
-		bond = sdk.NewCoins(msg.Bond)
+	// validate bond requirement
+	minBond := k.GetParams(ctx).MinBond
+	if !msg.Bond.IsGTE(minBond) {
+		return nil, errorsmod.Wrapf(
+			types.ErrInsufficientBond, "got %s, expected %s", msg.Bond, minBond,
+		)
 	}
 
+	// send bond to module account
+	seqAcc := sdk.MustAccAddressFromBech32(msg.Creator)
+	err := k.bankKeeper.SendCoinsFromAccountToModule(ctx, seqAcc, types.ModuleName, sdk.NewCoins(msg.Bond))
+	if err != nil {
+		return nil, err
+	}
+
+	bond := sdk.NewCoins(msg.Bond)
 	sequencer := types.Sequencer{
 		Address:      msg.Creator,
 		DymintPubKey: msg.DymintPubKey,

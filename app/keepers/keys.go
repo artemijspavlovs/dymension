@@ -13,6 +13,7 @@ import (
 	evidencetypes "github.com/cosmos/cosmos-sdk/x/evidence/types"
 	"github.com/cosmos/cosmos-sdk/x/feegrant"
 	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
+	grouptypes "github.com/cosmos/cosmos-sdk/x/group"
 	minttypes "github.com/cosmos/cosmos-sdk/x/mint/types"
 	paramstypes "github.com/cosmos/cosmos-sdk/x/params/types"
 	slashingtypes "github.com/cosmos/cosmos-sdk/x/slashing/types"
@@ -27,6 +28,8 @@ import (
 	gammtypes "github.com/osmosis-labs/osmosis/v15/x/gamm/types"
 	poolmanagertypes "github.com/osmosis-labs/osmosis/v15/x/poolmanager/types"
 	txfeestypes "github.com/osmosis-labs/osmosis/v15/x/txfees/types"
+
+	irotypes "github.com/dymensionxyz/dymension/v3/x/iro/types"
 
 	dymnstypes "github.com/dymensionxyz/dymension/v3/x/dymns/types"
 
@@ -114,6 +117,7 @@ var KVStoreKeys = sdk.NewKVStoreKeys(
 	capabilitytypes.StoreKey,
 	crisistypes.StoreKey,
 	consensusparamtypes.StoreKey,
+	irotypes.StoreKey,
 	rollappmoduletypes.StoreKey,
 	sequencermoduletypes.StoreKey,
 	sponsorshiptypes.StoreKey,
@@ -133,4 +137,5 @@ var KVStoreKeys = sdk.NewKVStoreKeys(
 	incentivestypes.StoreKey,
 	txfeestypes.StoreKey,
 	lightcliendmoduletypes.StoreKey,
+	grouptypes.StoreKey,
 )

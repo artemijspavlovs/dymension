@@ -16,6 +16,7 @@ import (
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	bankutil "github.com/cosmos/cosmos-sdk/x/bank/testutil"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
+	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
 	"github.com/cosmos/ibc-go/v7/modules/apps/transfer/types"
 	transfertypes "github.com/cosmos/ibc-go/v7/modules/apps/transfer/types"
 	channeltypes "github.com/cosmos/ibc-go/v7/modules/core/04-channel/types"
@@ -27,6 +28,8 @@ import (
 	"github.com/dymensionxyz/dymension/v3/app"
 	"github.com/dymensionxyz/dymension/v3/app/apptesting"
 	common "github.com/dymensionxyz/dymension/v3/x/common/types"
+	delayedackkeeper "github.com/dymensionxyz/dymension/v3/x/delayedack/keeper"
+	delayedacktypes "github.com/dymensionxyz/dymension/v3/x/delayedack/types"
 	eibctypes "github.com/dymensionxyz/dymension/v3/x/eibc/types"
 	rollappkeeper "github.com/dymensionxyz/dymension/v3/x/rollapp/keeper"
 	rollapptypes "github.com/dymensionxyz/dymension/v3/x/rollapp/types"
@@ -135,14 +138,15 @@ func (s *utilSuite) createRollapp(transfersEnabled bool, channelID *string) {
 			Telegram:    "https://t.me/rolly",
 			X:           "https://x.dymension.xyz",
 		},
-		rollapptypes.GenesisInfo{
+		&rollapptypes.GenesisInfo{
 			GenesisChecksum: "somechecksum",
-			Bech32Prefix:    "eth",
-			NativeDenom: &rollapptypes.DenomMetadata{
+			Bech32Prefix:    "ethm",
+			NativeDenom: rollapptypes.DenomMetadata{
 				Display:  "DEN",
 				Base:     "aden",
 				Exponent: 18,
 			},
+			InitialSupply: sdk.NewInt(1000),
 		},
 	)
 
@@ -160,6 +164,24 @@ func (s *utilSuite) createRollapp(transfersEnabled bool, channelID *string) {
 		ra.GenesisState.TransfersEnabled = transfersEnabled
 		a.RollappKeeper.SetRollapp(s.hubCtx(), ra)
 	}
+}
+
+// method to update the rollapp genesis info
+func (s *transferGenesisSuite) addGenesisAccounts(genesisAccounts []rollapptypes.GenesisAccount) {
+	rollapp := s.hubApp().RollappKeeper.MustGetRollapp(s.hubCtx(), rollappChainID())
+	s.Require().False(rollapp.GenesisInfo.Sealed)
+
+	if rollapp.GenesisInfo.GenesisAccounts == nil {
+		rollapp.GenesisInfo.GenesisAccounts = &rollapptypes.GenesisAccounts{}
+	}
+	rollapp.GenesisInfo.GenesisAccounts.Accounts = append(rollapp.GenesisInfo.GenesisAccounts.Accounts, genesisAccounts...)
+	s.hubApp().RollappKeeper.SetRollapp(s.hubCtx(), rollapp)
+}
+
+// necessary for tests which do not execute the entire light client flow, and just need to make transfers work
+// (all tests except the light client tests themselves)
+func (s *utilSuite) setRollappLightClientID(chainID, clientID string) {
+	s.hubApp().LightClientKeeper.SetCanonicalClient(s.hubCtx(), chainID, clientID)
 }
 
 func (s *utilSuite) registerSequencer() {
@@ -200,9 +222,9 @@ func (s *utilSuite) updateRollappState(endHeight uint64) {
 	numBlocks := endHeight - startHeight + 1
 	// populate the block descriptors
 	blockDescriptors := &rollapptypes.BlockDescriptors{BD: make([]rollapptypes.BlockDescriptor, numBlocks)}
-	for i := 0; i < int(numBlocks); i++ {
+	for i := uint64(0); i < numBlocks; i++ {
 		blockDescriptors.BD[i] = rollapptypes.BlockDescriptor{
-			Height:    startHeight + uint64(i),
+			Height:    startHeight + i,
 			StateRoot: bytes.Repeat([]byte{byte(startHeight) + byte(i)}, 32),
 			Timestamp: time.Now().UTC(),
 		}
@@ -229,7 +251,9 @@ func (s *utilSuite) finalizeRollappState(index uint64, endHeight uint64) (sdk.Ev
 	stateInfoIdx := rollapptypes.StateInfoIndex{RollappId: rollappChainID(), Index: index}
 	stateInfo, found := rollappKeeper.GetStateInfo(ctx, rollappChainID(), stateInfoIdx.Index)
 	s.Require().True(found)
+	// this is a hack to increase the finalized height by modifying the last state info instead of submitting a new one
 	stateInfo.NumBlocks = endHeight - stateInfo.StartHeight + 1
+	stateInfo.BDs.BD = make([]rollapptypes.BlockDescriptor, stateInfo.NumBlocks)
 	stateInfo.Status = common.Status_FINALIZED
 	// update the status of the stateInfo
 	rollappKeeper.SetStateInfo(ctx, stateInfo)
@@ -345,4 +369,29 @@ func (s *utilSuite) newTestChainWithSingleValidator(t *testing.T, coord *ibctest
 	coord.CommitBlock(chain)
 
 	return chain
+}
+
+func (s *utilSuite) finalizeRollappPacketsByReceiver(receiver string) sdk.Events {
+	s.T().Helper()
+	// Query all pending packets by receiver
+	querier := delayedackkeeper.NewQuerier(s.hubApp().DelayedAckKeeper)
+	resp, err := querier.GetPendingPacketsByReceiver(s.hubCtx(), &delayedacktypes.QueryPendingPacketsByReceiverRequest{
+		RollappId: rollappChainID(),
+		Receiver:  receiver,
+	})
+	s.Require().NoError(err)
+	// Finalize all packets are collect events
+	events := make(sdk.Events, 0)
+	for _, packet := range resp.RollappPackets {
+		k := common.EncodePacketKey(packet.RollappPacketKey())
+		handler := s.hubApp().MsgServiceRouter().Handler(new(delayedacktypes.MsgFinalizePacketByPacketKey))
+		resp, err := handler(s.hubCtx(), &delayedacktypes.MsgFinalizePacketByPacketKey{
+			Sender:    authtypes.NewModuleAddress(govtypes.ModuleName).String(),
+			PacketKey: k,
+		})
+		s.Require().NoError(err)
+		s.Require().NotNil(resp)
+		events = append(events, resp.GetEvents()...)
+	}
+	return events
 }

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"slices"
 	"testing"
-	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/dymensionxyz/sdk-utils/utils/urand"
@@ -16,6 +15,49 @@ import (
 	"github.com/dymensionxyz/dymension/v3/x/rollapp/keeper"
 	"github.com/dymensionxyz/dymension/v3/x/rollapp/types"
 )
+
+func TestLivenessArithmetic(t *testing.T) {
+	t.Run("simple case", func(t *testing.T) {
+		hEvent, _ := keeper.NextSlashOrJailHeight(
+			8,
+			4,
+			1000,
+			0,
+			0,
+		)
+		require.Equal(t, 8, int(hEvent))
+	})
+	t.Run("almost at the interval", func(t *testing.T) {
+		hEvent, _ := keeper.NextSlashOrJailHeight(
+			8,
+			4,
+			1000,
+			7,
+			0,
+		)
+		require.Equal(t, 8, int(hEvent))
+	})
+	t.Run("do not schedule for next height", func(t *testing.T) {
+		hEvent, _ := keeper.NextSlashOrJailHeight(
+			8,
+			4,
+			1000,
+			8,
+			0,
+		)
+		require.Equal(t, 12, int(hEvent))
+	})
+	t.Run("do not schedule for next height", func(t *testing.T) {
+		hEvent, _ := keeper.NextSlashOrJailHeight(
+			8,
+			4,
+			1000,
+			12,
+			0,
+		)
+		require.Equal(t, 16, int(hEvent))
+	})
+}
 
 // Storage and query operations work for the event queue
 func TestLivenessEventsStorage(t *testing.T) {
@@ -146,10 +188,6 @@ func (suite *RollappTestSuite) TestLivenessFlow() {
 type livenessMockSequencerKeeper struct {
 	slashes map[string]int
 	jails   map[string]int
-}
-
-func (l livenessMockSequencerKeeper) UnbondingTime(sdk.Context) (res time.Duration) {
-	return time.Minute
 }
 
 func newLivenessMockSequencerKeeper() livenessMockSequencerKeeper {

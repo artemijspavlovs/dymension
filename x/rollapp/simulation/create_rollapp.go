@@ -41,10 +41,10 @@ func SimulateMsgCreateRollapp(ak simulationtypes.AccountKeeper, bk simulationtyp
 				Telegram:    "https://t.me/rolly",
 				X:           "https://x.dymension.xyz",
 			},
-			GenesisInfo: types.GenesisInfo{
+			GenesisInfo: &types.GenesisInfo{
 				GenesisChecksum: "checksum",
 				Bech32Prefix:    "bech",
-				NativeDenom: &types.DenomMetadata{
+				NativeDenom: types.DenomMetadata{
 					Display:  "DYM",
 					Base:     "udym",
 					Exponent: 6,

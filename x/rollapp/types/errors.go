@@ -47,10 +47,13 @@ var (
 	ErrInvalidNativeDenom                = errorsmod.Wrap(gerrc.ErrInvalidArgument, "invalid native denom")
 	ErrInvalidFeeDenom                   = errorsmod.Wrap(gerrc.ErrInvalidArgument, "invalid fee denom")
 	ErrInvalidInitialSupply              = errorsmod.Wrap(gerrc.ErrInvalidArgument, "invalid initial supply")
+	ErrInvalidBech32Prefix               = errorsmod.Wrap(gerrc.ErrInvalidArgument, "invalid bech32 prefix")
+	ErrRollappNotFound                   = errorsmod.Wrap(gerrc.ErrNotFound, "rollapp")
 
 	/* ------------------------------ fraud related ----------------------------- */
 	ErrDisputeAlreadyFinalized = errorsmod.Register(ModuleName, 2000, "disputed height already finalized")
 	ErrDisputeAlreadyReverted  = errorsmod.Register(ModuleName, 2001, "disputed height already reverted")
 	ErrWrongClientId           = errorsmod.Register(ModuleName, 2002, "client id does not match the rollapp")
 	ErrWrongProposerAddr       = errorsmod.Register(ModuleName, 2003, "wrong proposer address")
+	ErrInvalidDRSVersion       = errorsmod.Register(ModuleName, 2004, "wrong DRS version")
 )
