@@ -15,6 +15,7 @@ import (
 	"github.com/grpc-ecosystem/grpc-gateway/runtime"
 	"github.com/spf13/cobra"
 
+	simulationtypes "github.com/dymensionxyz/dymension/v3/simulation/types"
 	"github.com/dymensionxyz/dymension/v3/x/sequencer/client/cli"
 	"github.com/dymensionxyz/dymension/v3/x/sequencer/keeper"
 	"github.com/dymensionxyz/dymension/v3/x/sequencer/types"
@@ -98,27 +99,21 @@ func (AppModuleBasic) GetQueryCmd() *cobra.Command {
 type AppModule struct {
 	AppModuleBasic
 
-	keeper        keeper.Keeper
-	accountKeeper types.AccountKeeper
-	bankKeeper    types.BankKeeper
-
-	// legacySubspace is used solely for migration of x/params managed parameters
-	legacySubspace Subspace
+	keeper        *keeper.Keeper
+	accountKeeper simulationtypes.AccountKeeper
+	bankKeeper    simulationtypes.BankKeeper
 }
 
 func NewAppModule(
 	cdc codec.Codec,
-	keeper keeper.Keeper,
-	accountKeeper types.AccountKeeper,
-	bankKeeper types.BankKeeper,
-	ss Subspace,
+	keeper *keeper.Keeper,
+	accountKeeper simulationtypes.AccountKeeper,
+	bankKeeper simulationtypes.BankKeeper,
 ) AppModule {
 	return AppModule{
 		AppModuleBasic: NewAppModuleBasic(cdc),
 		keeper:         keeper,
-		accountKeeper:  accountKeeper,
 		bankKeeper:     bankKeeper,
-		legacySubspace: ss,
 	}
 }
 
@@ -132,16 +127,11 @@ func (am AppModule) Name() string {
 func (am AppModule) RegisterServices(cfg module.Configurator) {
 	types.RegisterMsgServer(cfg.MsgServer(), keeper.NewMsgServerImpl(am.keeper))
 	types.RegisterQueryServer(cfg.QueryServer(), am.keeper)
-
-	m := NewMigrator(am.keeper, am.legacySubspace)
-	if err := cfg.RegisterMigration(types.ModuleName, 2, m.Migrate2to3); err != nil {
-		panic(fmt.Sprintf("failed to migrate x/%s from version 2 to 3: %v", types.ModuleName, err))
-	}
 }
 
 // RegisterInvariants registers the module's invariants.
 func (am AppModule) RegisterInvariants(ir sdk.InvariantRegistry) {
-	keeper.RegisterInvariants(ir, am.keeper)
+	keeper.RegisterInvariants(ir, *am.keeper)
 }
 
 // InitGenesis performs the capability module's genesis initialization It returns
@@ -163,22 +153,19 @@ func (am AppModule) ExportGenesis(ctx sdk.Context, cdc codec.JSONCodec) json.Raw
 }
 
 // ConsensusVersion implements ConsensusVersion.
-func (AppModule) ConsensusVersion() uint64 { return 3 }
+func (AppModule) ConsensusVersion() uint64 { return 2 }
 
 // BeginBlock executes all ABCI BeginBlock logic respective to the capability module.
-func (am AppModule) BeginBlock(_ sdk.Context, _ abci.RequestBeginBlock) {}
+func (am AppModule) BeginBlock(ctx sdk.Context, _ abci.RequestBeginBlock) {
+	// Must be in begin block to make sure successor is set before allowing last block from proposer
+	err := am.keeper.ChooseSuccessorForFinishedNotices(ctx, ctx.BlockTime())
+	if err != nil {
+		ctx.Logger().Error("ChooseNewProposerForFinishedNoticePeriods", "err", err)
+	}
+}
 
 // EndBlock executes all ABCI EndBlock logic respective to the capability module. It
 // returns no validator updates.
 func (am AppModule) EndBlock(ctx sdk.Context, _ abci.RequestEndBlock) []abci.ValidatorUpdate {
-	// start unbonding period for sequencers after notice period
-	am.keeper.MatureSequencersWithNoticePeriod(ctx, ctx.BlockTime())
-
-	// Unbond all mature sequencers
-	am.keeper.UnbondAllMatureSequencers(ctx, ctx.BlockTime())
-
-	// Handle bond reduction
-	am.keeper.HandleBondReduction(ctx, ctx.BlockTime())
-
 	return []abci.ValidatorUpdate{}
 }

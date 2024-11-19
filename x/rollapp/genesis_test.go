@@ -15,7 +15,7 @@ import (
 func TestInitExportGenesis(t *testing.T) {
 	const (
 		rollappID1 = "rollapp_1234-1"
-		rollappID2 = "rollupp_1235-2"
+		rollappID2 = "rollupp_1235-1"
 		appID1     = "app1"
 		appID2     = "app2"
 	)
@@ -75,6 +75,30 @@ func TestInitExportGenesis(t *testing.T) {
 			{
 				Name:      appID2,
 				RollappId: rollappID2,
+			},
+		},
+		SequencerHeightPairs: []types.SequencerHeightPair{
+			{
+				Sequencer: "seq1",
+				Height:    0,
+			},
+			{
+				Sequencer: "seq2",
+				Height:    1,
+			},
+			{
+				Sequencer: "seq3",
+				Height:    2,
+			},
+		},
+		LivenessEvents: []types.LivenessEvent{
+			{
+				RollappId: rollappID2,
+				HubHeight: 42,
+			},
+			{
+				RollappId: rollappID1,
+				HubHeight: 44,
 			},
 		},
 	}

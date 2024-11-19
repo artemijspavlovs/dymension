@@ -2,6 +2,7 @@ package keeper
 
 import (
 	"fmt"
+	"slices"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
@@ -96,25 +97,23 @@ func BlockHeightToFinalizationQueueInvariant(k Keeper) sdk.Invariant {
 				continue
 			}
 
-			if rollapp.GetFrozen() {
-				continue
-			}
 			latestStateIdx, _ := k.GetLatestStateInfoIndex(ctx, rollapp.RollappId)
 			latestFinalizedStateIdx, _ := k.GetLatestFinalizedStateIndex(ctx, rollapp.RollappId)
 
 			firstUnfinalizedStateIdx := latestFinalizedStateIdx.Index + 1
 
 			// iterate over all the unfinalized states and make sure they are in the queue
+			// additionally, check that all the states for a given height and rollapp relate to the correct rollapp
 			for i := firstUnfinalizedStateIdx; i <= latestStateIdx.Index; i++ {
 				stateInfo, found := k.GetStateInfo(ctx, rollapp.RollappId, i)
-
 				if !found {
 					msg += fmt.Sprintf("rollapp (%s) have no stateInfo at index %d\n", rollapp.RollappId, i)
 					broken = true
 					continue
 				}
+
 				creationHeight := stateInfo.CreationHeight
-				val, found := k.GetBlockHeightToFinalizationQueue(ctx, creationHeight)
+				val, found := k.GetFinalizationQueue(ctx, creationHeight, rollapp.RollappId)
 				if !found {
 					msg += fmt.Sprintf("finalizationQueue (%d) have no block height\n", creationHeight)
 					broken = true
@@ -122,15 +121,20 @@ func BlockHeightToFinalizationQueueInvariant(k Keeper) sdk.Invariant {
 				}
 
 				// check that our state index is in the queue
-				found = false
-				for _, idx := range val.FinalizationQueue {
-					if idx.RollappId == rollapp.RollappId && idx.Index == i {
-						found = true
-						break
-					}
-				}
+				found = slices.ContainsFunc(val.FinalizationQueue, func(idx types.StateInfoIndex) bool {
+					return idx.Index == i
+				})
 				if !found {
 					msg += fmt.Sprintf("rollapp (%s) have stateInfo at index %d not in the queue\n", rollapp.RollappId, i)
+					broken = true
+				}
+
+				// check that all the states for a given height and rollapp relate to the correct rollapp
+				found = slices.ContainsFunc(val.FinalizationQueue, func(idx types.StateInfoIndex) bool {
+					return idx.RollappId != rollapp.RollappId
+				})
+				if found {
+					msg += fmt.Sprintf("rollapp (%s) has stateInfo that doesn't not correspond to it\n", rollapp.RollappId)
 					broken = true
 				}
 			}
@@ -269,7 +273,7 @@ func LivenessEventInvariant(k Keeper) sdk.Invariant {
 		)
 		rollapps := k.GetAllRollapps(ctx)
 		for _, ra := range rollapps {
-			if !ra.LastStateUpdateHeightIsSet() {
+			if ra.LivenessEventHeight == 0 {
 				continue
 			}
 			events := k.GetLivenessEvents(ctx, &ra.LivenessEventHeight)

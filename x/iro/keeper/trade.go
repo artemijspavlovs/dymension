@@ -2,13 +2,12 @@ package keeper
 
 import (
 	"context"
+	"fmt"
 
 	errorsmod "cosmossdk.io/errors"
 	"cosmossdk.io/math"
-
 	sdk "github.com/cosmos/cosmos-sdk/types"
-
-	txfeestypes "github.com/osmosis-labs/osmosis/v15/x/txfees/types"
+	"github.com/dymensionxyz/sdk-utils/utils/uevent"
 
 	appparams "github.com/dymensionxyz/dymension/v3/app/params"
 	"github.com/dymensionxyz/dymension/v3/x/iro/types"
@@ -60,7 +59,7 @@ func (m msgServer) Sell(ctx context.Context, req *types.MsgSell) (*types.MsgSell
 
 // Buy buys fixed amount of allocation with price according to the price curve
 func (k Keeper) Buy(ctx sdk.Context, planId string, buyer sdk.AccAddress, amountTokensToBuy, maxCostAmt math.Int) error {
-	plan, err := k.GetTradeableIRO(ctx, planId, buyer.String())
+	plan, err := k.GetTradeableIRO(ctx, planId)
 	if err != nil {
 		return err
 	}
@@ -84,7 +83,8 @@ func (k Keeper) Buy(ctx sdk.Context, planId string, buyer sdk.AccAddress, amount
 
 	// Charge taker fee
 	takerFee := sdk.NewCoin(appparams.BaseDenom, takerFeeAmt)
-	err = k.chargeTakerFee(ctx, takerFee, buyer)
+	owner := k.rk.MustGetRollappOwner(ctx, plan.RollappId)
+	err = k.chargeTakerFee(ctx, takerFee, buyer, &owner)
 	if err != nil {
 		return err
 	}
@@ -107,13 +107,15 @@ func (k Keeper) Buy(ctx sdk.Context, planId string, buyer sdk.AccAddress, amount
 	k.SetPlan(ctx, *plan)
 
 	// Emit event
-	err = ctx.EventManager().EmitTypedEvent(&types.EventBuy{
-		Buyer:     buyer.String(),
-		PlanId:    planId,
-		RollappId: plan.RollappId,
-		Amount:    amountTokensToBuy,
-		Cost:      costAmt,
-		TakerFee:  takerFeeAmt,
+	err = uevent.EmitTypedEvent(ctx, &types.EventBuy{
+		Buyer:        buyer.String(),
+		PlanId:       planId,
+		RollappId:    plan.RollappId,
+		Amount:       amountTokensToBuy,
+		Cost:         costAmt,
+		TakerFee:     takerFeeAmt,
+		ClosingPrice: plan.SpotPrice(),
+		Denom:        plan.GetIRODenom(),
 	})
 	if err != nil {
 		return err
@@ -124,7 +126,7 @@ func (k Keeper) Buy(ctx sdk.Context, planId string, buyer sdk.AccAddress, amount
 
 // BuyExactSpend uses exact amount of DYM to buy tokens on the curve
 func (k Keeper) BuyExactSpend(ctx sdk.Context, planId string, buyer sdk.AccAddress, amountToSpend, minTokensAmt math.Int) error {
-	plan, err := k.GetTradeableIRO(ctx, planId, buyer.String())
+	plan, err := k.GetTradeableIRO(ctx, planId)
 	if err != nil {
 		return err
 	}
@@ -153,7 +155,8 @@ func (k Keeper) BuyExactSpend(ctx sdk.Context, planId string, buyer sdk.AccAddre
 
 	// Charge taker fee
 	takerFee := sdk.NewCoin(appparams.BaseDenom, takerFeeAmt)
-	err = k.chargeTakerFee(ctx, takerFee, buyer)
+	owner := k.rk.MustGetRollappOwner(ctx, plan.RollappId)
+	err = k.chargeTakerFee(ctx, takerFee, buyer, &owner)
 	if err != nil {
 		return err
 	}
@@ -176,13 +179,15 @@ func (k Keeper) BuyExactSpend(ctx sdk.Context, planId string, buyer sdk.AccAddre
 	k.SetPlan(ctx, *plan)
 
 	// Emit event
-	err = ctx.EventManager().EmitTypedEvent(&types.EventBuy{
-		Buyer:     buyer.String(),
-		PlanId:    planId,
-		RollappId: plan.RollappId,
-		Amount:    tokensOutAmt,
-		Cost:      toSpendMinusTakerFeeAmt,
-		TakerFee:  takerFeeAmt,
+	err = uevent.EmitTypedEvent(ctx, &types.EventBuy{
+		Buyer:        buyer.String(),
+		PlanId:       planId,
+		RollappId:    plan.RollappId,
+		Amount:       tokensOutAmt,
+		Cost:         toSpendMinusTakerFeeAmt,
+		TakerFee:     takerFeeAmt,
+		ClosingPrice: plan.SpotPrice(),
+		Denom:        plan.GetIRODenom(),
 	})
 	if err != nil {
 		return err
@@ -193,7 +198,7 @@ func (k Keeper) BuyExactSpend(ctx sdk.Context, planId string, buyer sdk.AccAddre
 
 // Sell sells allocation with price according to the price curve
 func (k Keeper) Sell(ctx sdk.Context, planId string, seller sdk.AccAddress, amountTokensToSell, minIncomeAmt math.Int) error {
-	plan, err := k.GetTradeableIRO(ctx, planId, seller.String())
+	plan, err := k.GetTradeableIRO(ctx, planId)
 	if err != nil {
 		return err
 	}
@@ -212,7 +217,8 @@ func (k Keeper) Sell(ctx sdk.Context, planId string, seller sdk.AccAddress, amou
 
 	// Charge taker fee
 	takerFee := sdk.NewCoin(appparams.BaseDenom, takerFeeAmt)
-	err = k.chargeTakerFee(ctx, takerFee, seller)
+	owner := k.rk.MustGetRollappOwner(ctx, plan.RollappId)
+	err = k.chargeTakerFee(ctx, takerFee, seller, &owner)
 	if err != nil {
 		return err
 	}
@@ -235,13 +241,15 @@ func (k Keeper) Sell(ctx sdk.Context, planId string, seller sdk.AccAddress, amou
 	k.SetPlan(ctx, *plan)
 
 	// Emit event
-	err = ctx.EventManager().EmitTypedEvent(&types.EventSell{
-		Seller:    seller.String(),
-		PlanId:    planId,
-		RollappId: plan.RollappId,
-		Amount:    amountTokensToSell,
-		Revenue:   costAmt,
-		TakerFee:  takerFeeAmt,
+	err = uevent.EmitTypedEvent(ctx, &types.EventSell{
+		Seller:       seller.String(),
+		PlanId:       planId,
+		RollappId:    plan.RollappId,
+		Amount:       amountTokensToSell,
+		Revenue:      costAmt,
+		TakerFee:     takerFeeAmt,
+		ClosingPrice: plan.SpotPrice(),
+		Denom:        plan.GetIRODenom(),
 	})
 	if err != nil {
 		return err
@@ -253,8 +261,8 @@ func (k Keeper) Sell(ctx sdk.Context, planId string, seller sdk.AccAddress, amou
 // GetTradeableIRO returns the tradeable IRO plan
 // - plan must exist
 // - plan must not be settled
-// - plan must have started (unless the trader is the owner)
-func (k Keeper) GetTradeableIRO(ctx sdk.Context, planId string, trader string) (*types.Plan, error) {
+// - plan must have started
+func (k Keeper) GetTradeableIRO(ctx sdk.Context, planId string) (*types.Plan, error) {
 	plan, found := k.GetPlan(ctx, planId)
 	if !found {
 		return nil, types.ErrPlanNotFound
@@ -264,18 +272,22 @@ func (k Keeper) GetTradeableIRO(ctx sdk.Context, planId string, trader string) (
 		return nil, errorsmod.Wrapf(types.ErrPlanSettled, "planId: %d", plan.Id)
 	}
 
-	// Validate start time started (unless the trader is the owner)
-	if ctx.BlockTime().Before(plan.StartTime) && k.rk.MustGetRollapp(ctx, plan.RollappId).Owner != trader {
+	// Validate start time started
+	if ctx.BlockTime().Before(plan.StartTime) {
 		return nil, errorsmod.Wrapf(types.ErrPlanNotStarted, "planId: %d", plan.Id)
 	}
 
 	return &plan, nil
 }
 
-// chargeTakerFee charges taker fee from the sender
-// takerFee sent to the txfees module
-func (k Keeper) chargeTakerFee(ctx sdk.Context, takerFee sdk.Coin, sender sdk.AccAddress) error {
-	return k.BK.SendCoinsFromAccountToModule(ctx, sender, txfeestypes.ModuleName, sdk.NewCoins(takerFee))
+// chargeTakerFee charges taker fee from the sender.
+// The fee is sent to the txfees module and the beneficiary if presented.
+func (k Keeper) chargeTakerFee(ctx sdk.Context, takerFeeCoin sdk.Coin, sender sdk.AccAddress, beneficiary *sdk.AccAddress) error {
+	err := k.tk.ChargeFeesFromPayer(ctx, sender, takerFeeCoin, beneficiary)
+	if err != nil {
+		return fmt.Errorf("charge fees: sender: %s: fee: %s: %w", sender, takerFeeCoin, err)
+	}
+	return nil
 }
 
 // ApplyTakerFee applies taker fee to the cost

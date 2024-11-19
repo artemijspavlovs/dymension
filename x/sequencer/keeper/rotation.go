@@ -1,141 +1,144 @@
 package keeper
 
 import (
-	"sort"
+	"slices"
+	"strings"
 	"time"
 
 	errorsmod "cosmossdk.io/errors"
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	"github.com/dymensionxyz/dymension/v3/x/sequencer/types"
 	"github.com/dymensionxyz/gerr-cosmos/gerrc"
+
+	"github.com/dymensionxyz/dymension/v3/x/sequencer/types"
 )
 
-func (k Keeper) startNoticePeriodForSequencer(ctx sdk.Context, seq *types.Sequencer) time.Time {
-	completionTime := ctx.BlockTime().Add(k.NoticePeriod(ctx))
-	seq.NoticePeriodTime = completionTime
+// StartNoticePeriod defines a period of time for the proposer where
+// they cannot yet unbond, nor submit their last block. Adds to a queue for later
+// processing.
+func (k Keeper) StartNoticePeriod(ctx sdk.Context, prop *types.Sequencer) {
+	prop.NoticePeriodTime = ctx.BlockTime().Add(k.GetParams(ctx).NoticePeriod)
 
-	k.UpdateSequencer(ctx, seq)
-	k.AddSequencerToNoticePeriodQueue(ctx, seq)
+	k.AddToNoticeQueue(ctx, *prop)
 
 	ctx.EventManager().EmitEvent(
 		sdk.NewEvent(
 			types.EventTypeNoticePeriodStarted,
-			sdk.NewAttribute(types.AttributeKeyRollappId, seq.RollappId),
-			sdk.NewAttribute(types.AttributeKeySequencer, seq.Address),
-			sdk.NewAttribute(types.AttributeKeyCompletionTime, completionTime.String()),
+			sdk.NewAttribute(types.AttributeKeyRollappId, prop.RollappId),
+			sdk.NewAttribute(types.AttributeKeySequencer, prop.Address),
+			sdk.NewAttribute(types.AttributeKeyCompletionTime, prop.NoticePeriodTime.String()),
 		),
 	)
-
-	return completionTime
 }
 
-// MatureSequencersWithNoticePeriod start rotation flow for all sequencers that have finished their notice period
-// The next proposer is set to the next bonded sequencer
-// The hub will expect a "last state update" from the sequencer to start unbonding
-// In the middle of rotation, the next proposer required a notice period as well.
-func (k Keeper) MatureSequencersWithNoticePeriod(ctx sdk.Context, currTime time.Time) {
-	seqs := k.GetMatureNoticePeriodSequencers(ctx, currTime)
+// NoticeElapsedProposers gets all sequencers across all rollapps whose notice period
+// has passed/elapsed.
+func (k Keeper) NoticeElapsedProposers(ctx sdk.Context, endTime time.Time) ([]types.Sequencer, error) {
+	return k.NoticeQueue(ctx, &endTime)
+}
+
+// ChooseSuccessorForFinishedNotices goes through all sequencers whose notice periods have elapsed.
+// For each proposer, it chooses a successor proposer for their rollapp.
+// Contract: must be called before OnProposerLastBlock for a given block time
+func (k Keeper) ChooseSuccessorForFinishedNotices(ctx sdk.Context, now time.Time) error {
+	seqs, err := k.NoticeElapsedProposers(ctx, now)
+	if err != nil {
+		return errorsmod.Wrap(err, "get notice elapsed sequencers")
+	}
 	for _, seq := range seqs {
-		if k.isProposer(ctx, seq.RollappId, seq.Address) {
-			k.startRotation(ctx, seq.RollappId)
-			k.removeNoticePeriodSequencer(ctx, seq)
+		k.removeFromNoticeQueue(ctx, seq)
+		if err := k.setSuccessorForRotatingRollapp(ctx, seq.RollappId); err != nil {
+			return errorsmod.Wrap(err, "choose successor")
 		}
-		// next proposer cannot mature it's notice period until the current proposer has finished rotation
-		// minor effect as notice_period >>> rotation time
+		successor := k.GetSuccessor(ctx, seq.RollappId)
+		ctx.EventManager().EmitEvent(
+			sdk.NewEvent(
+				types.EventTypeRotationStarted,
+				sdk.NewAttribute(types.AttributeKeyRollappId, seq.RollappId),
+				sdk.NewAttribute(types.AttributeKeyNextProposer, successor.Address),
+				sdk.NewAttribute(types.AttributeKeyRewardAddr, successor.RewardAddr),
+				sdk.NewAttribute(types.AttributeKeyWhitelistedRelayers, strings.Join(successor.WhitelistedRelayers, ",")),
+			),
+		)
 	}
+	return nil
 }
 
-// IsRotating returns true if the rollapp is currently in the process of rotation.
-// A process of rotation is defined by the existence of a next proposer. The next proposer can also be a "dummy" sequencer (i.e empty) in case no sequencer came. This is still considered rotation
-// as the sequencer is rotating to an empty one (i.e gracefully leaving the rollapp).
-// The next proposer can only be set after the notice period is over. The rotation period is over after the proposer sends his last batch.
-func (k Keeper) IsRotating(ctx sdk.Context, rollappId string) bool {
-	return k.isNextProposerSet(ctx, rollappId)
+func (k Keeper) RotationInProgress(ctx sdk.Context, rollapp string) bool {
+	prop := k.GetProposer(ctx, rollapp)
+	return prop.NoticeInProgress(ctx.BlockTime()) || k.AwaitingLastProposerBlock(ctx, rollapp)
 }
 
-// isNoticePeriodRequired returns true if the sequencer requires a notice period before unbonding
-// Both the proposer and the next proposer require a notice period
-func (k Keeper) isNoticePeriodRequired(ctx sdk.Context, seq types.Sequencer) bool {
-	return k.isProposer(ctx, seq.RollappId, seq.Address) || k.isNextProposer(ctx, seq.RollappId, seq.Address)
+func (k Keeper) AwaitingLastProposerBlock(ctx sdk.Context, rollapp string) bool {
+	proposer := k.GetProposer(ctx, rollapp)
+	return proposer.NoticeElapsed(ctx.BlockTime())
 }
 
-// ExpectedNextProposer returns the next proposer for a rollapp
-// it selects the next proposer from the bonded sequencers by bond amount
-// if there are no bonded sequencers, it returns an empty sequencer
-func (k Keeper) ExpectedNextProposer(ctx sdk.Context, rollappId string) types.Sequencer {
-	// if nextProposer is set, were in the middle of rotation. The expected next proposer cannot change
-	seq, ok := k.GetNextProposer(ctx, rollappId)
-	if ok {
-		return seq
+// OnProposerLastBlock : it will assign the successor to be the proposer.
+// Contract: must be called after ChooseSuccessorForFinishedNotices for a given block time
+func (k Keeper) OnProposerLastBlock(ctx sdk.Context, proposer types.Sequencer) error {
+	allowLastBlock := proposer.NoticeElapsed(ctx.BlockTime())
+	if !allowLastBlock {
+		return errorsmod.Wrap(gerrc.ErrFault, "sequencer has submitted last block without finishing notice period")
 	}
 
-	// take the next bonded sequencer to be the proposer. sorted by bond
-	seqs := k.GetSequencersByRollappByStatus(ctx, rollappId, types.Bonded)
-	sort.SliceStable(seqs, func(i, j int) bool {
-		return seqs[i].Tokens.IsAllGT(seqs[j].Tokens)
-	})
+	rollapp := proposer.RollappId
 
-	// return the first sequencer that is not the proposer
-	proposer, _ := k.GetProposer(ctx, rollappId)
-	for _, s := range seqs {
-		if s.Address != proposer.Address {
-			return s
+	successor := k.GetSuccessor(ctx, rollapp)
+	k.SetSuccessor(ctx, rollapp, types.SentinelSeqAddr) // clear successor
+	k.SetProposer(ctx, rollapp, successor.Address)
+
+	// if successor is sentinel, prepare new revision for the rollapp
+	if successor.Sentinel() {
+		err := k.rollappKeeper.HardForkToLatest(ctx, rollapp)
+		if err != nil {
+			return errorsmod.Wrap(err, "hard fork to latest")
 		}
-	}
-
-	return types.Sequencer{}
-}
-
-// startRotation sets the nextSequencer for the rollapp.
-// This function will not clear the current proposer
-// This function called when the sequencer has finished its notice period
-func (k Keeper) startRotation(ctx sdk.Context, rollappId string) {
-	// next proposer can be empty if there are no bonded sequencers available
-	nextProposer := k.ExpectedNextProposer(ctx, rollappId)
-	k.setNextProposer(ctx, rollappId, nextProposer.Address)
-
-	k.Logger(ctx).Info("rotation started", "rollappId", rollappId, "nextProposer", nextProposer.Address)
-
-	ctx.EventManager().EmitEvent(
-		sdk.NewEvent(
-			types.EventTypeRotationStarted,
-			sdk.NewAttribute(types.AttributeKeyRollappId, rollappId),
-			sdk.NewAttribute(types.AttributeKeyNextProposer, nextProposer.Address),
-		),
-	)
-}
-
-// CompleteRotation completes the sequencer rotation flow.
-// It's called when a last state update is received from the active, rotating sequencer.
-// it will start unbonding the current proposer, and sets the nextProposer as the proposer.
-func (k Keeper) CompleteRotation(ctx sdk.Context, rollappId string) error {
-	proposer, ok := k.GetProposer(ctx, rollappId)
-	if !ok {
-		return errorsmod.Wrapf(gerrc.ErrInternal, "proposer not set for rollapp %s", rollappId)
-	}
-	nextProposer, ok := k.GetNextProposer(ctx, rollappId)
-	if !ok {
-		return errorsmod.Wrapf(gerrc.ErrInternal, "next proposer not set for rollapp %s", rollappId)
-	}
-
-	// start unbonding the current proposer
-	k.startUnbondingPeriodForSequencer(ctx, &proposer)
-
-	// change the proposer
-	k.removeNextProposer(ctx, rollappId)
-	k.SetProposer(ctx, rollappId, nextProposer.Address)
-
-	if nextProposer.Address == NO_SEQUENCER_AVAILABLE {
-		k.Logger(ctx).Info("Rollapp left with no proposer.", "RollappID", rollappId)
+	} else if err := k.hooks.AfterSetRealProposer(ctx, rollapp, successor); err != nil {
+		return errorsmod.Wrap(err, "after set real sequencer")
 	}
 
 	ctx.EventManager().EmitEvent(
 		sdk.NewEvent(
 			types.EventTypeProposerRotated,
-			sdk.NewAttribute(types.AttributeKeyRollappId, rollappId),
-			sdk.NewAttribute(types.AttributeKeySequencer, nextProposer.Address),
+			sdk.NewAttribute(types.AttributeKeyRollappId, proposer.RollappId),
+			sdk.NewAttribute(types.AttributeKeySequencer, successor.Address),
 		),
 	)
-
 	return nil
+}
+
+// setSuccessorForRotatingRollapp will assign a successor to the rollapp.
+// It will prioritize non sentinel
+// called when a proposer has finished their notice period.
+func (k Keeper) setSuccessorForRotatingRollapp(ctx sdk.Context, rollapp string) error {
+	seqs := k.RollappPotentialProposers(ctx, rollapp)
+	successor, err := ProposerChoiceAlgo(seqs)
+	if err != nil {
+		return err
+	}
+	k.SetSuccessor(ctx, rollapp, successor.Address)
+	return nil
+}
+
+// ProposerChoiceAlgo : choose the one with most bond
+// Requires sentinel to be passed in, as last resort.
+func ProposerChoiceAlgo(seqs []types.Sequencer) (types.Sequencer, error) {
+	if len(seqs) == 0 {
+		return types.Sequencer{}, gerrc.ErrInternal.Wrap("seqs must at least include sentinel")
+	}
+	// slices package is recommended over sort package
+	slices.SortStableFunc(seqs, func(a, b types.Sequencer) int {
+		ca := a.TokensCoin()
+		cb := b.TokensCoin()
+		if ca.IsEqual(cb) {
+			return 0
+		}
+
+		// flipped to sort decreasing
+		if ca.IsLT(cb) {
+			return 1
+		}
+		return -1
+	})
+	return seqs[0], nil
 }

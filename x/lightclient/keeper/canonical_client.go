@@ -9,6 +9,7 @@ import (
 	ibcclienttypes "github.com/cosmos/ibc-go/v7/modules/core/02-client/types"
 	"github.com/cosmos/ibc-go/v7/modules/core/exported"
 	ibctm "github.com/cosmos/ibc-go/v7/modules/light-clients/07-tendermint"
+
 	"github.com/dymensionxyz/dymension/v3/x/lightclient/types"
 )
 
@@ -20,6 +21,9 @@ import (
 func (k Keeper) GetProspectiveCanonicalClient(ctx sdk.Context, rollappId string, maxHeight uint64) (clientID string, stateCompatible bool) {
 	k.ibcClientKeeper.IterateClientStates(ctx, nil, func(client string, cs exported.ClientState) bool {
 		err := k.validClient(ctx, client, cs, rollappId, maxHeight)
+		if err != nil && !errorsmod.IsOf(err, errChainIDMismatch) {
+			ctx.Logger().Debug("tried to validate rollapp against light client for same chain id: rollapp: %s: client: %s", rollappId, client, "err", err)
+		}
 		if err == nil {
 			clientID = client
 			stateCompatible = true
@@ -59,9 +63,11 @@ func (k Keeper) GetAllCanonicalClients(ctx sdk.Context) (clients []types.Canonic
 	return
 }
 
-func (k Keeper) expectedClient(ctx sdk.Context) ibctm.ClientState {
-	return types.ExpectedCanonicalClientParams(k.sequencerKeeper.UnbondingTime(ctx))
+func (k Keeper) expectedClient() ibctm.ClientState {
+	return types.DefaultExpectedCanonicalClientParams()
 }
+
+var errChainIDMismatch = errors.New("chain id mismatch")
 
 func (k Keeper) validClient(ctx sdk.Context, clientID string, cs exported.ClientState, rollappId string, maxHeight uint64) error {
 	tmClientState, ok := cs.(*ibctm.ClientState)
@@ -69,14 +75,16 @@ func (k Keeper) validClient(ctx sdk.Context, clientID string, cs exported.Client
 		return errors.New("not tm client")
 	}
 	if tmClientState.ChainId != rollappId {
-		return errors.New("wrong chain id")
+		return errChainIDMismatch
 	}
 
-	expClient := k.expectedClient(ctx)
+	expClient := k.expectedClient()
 
 	if err := types.IsCanonicalClientParamsValid(tmClientState, &expClient); err != nil {
 		return errorsmod.Wrap(err, "params")
 	}
+
+	// FIXME: No need to get all consensus states. should iterate over the consensus states
 	res, err := k.ibcClientKeeper.ConsensusStateHeights(ctx, &ibcclienttypes.QueryConsensusStateHeightsRequest{
 		ClientId:   clientID,
 		Pagination: &query.PageRequest{Limit: maxHeight},
@@ -94,24 +102,25 @@ func (k Keeper) validClient(ctx sdk.Context, clientID string, cs exported.Client
 		tmConsensusState, _ := consensusState.(*ibctm.ConsensusState)
 		stateInfoH, err := k.rollappKeeper.FindStateInfoByHeight(ctx, rollappId, h)
 		if err != nil {
-			return errorsmod.Wrap(err, "find state info by height h")
+			return errorsmod.Wrapf(err, "find state info by height h: %d", h)
 		}
 		stateInfoHplus1, err := k.rollappKeeper.FindStateInfoByHeight(ctx, rollappId, h+1)
 		if err != nil {
-			return errorsmod.Wrap(err, "find state info by height h+1")
+			return errorsmod.Wrapf(err, "find state info by height h+1: %d", h+1)
 		}
 		bd, _ := stateInfoH.GetBlockDescriptor(h)
-		oldSequencer, err := k.GetSequencerPubKey(ctx, stateInfoHplus1.Sequencer)
+
+		nextSeq, err := k.SeqK.RealSequencer(ctx, stateInfoHplus1.Sequencer)
 		if err != nil {
-			return errorsmod.Wrap(err, "get sequencer pubkey")
+			return errorsmod.Wrap(err, "get sequencer")
 		}
 		rollappState := types.RollappState{
 			BlockDescriptor:    bd,
-			NextBlockSequencer: oldSequencer,
+			NextBlockSequencer: nextSeq,
 		}
 		err = types.CheckCompatibility(*tmConsensusState, rollappState)
 		if err != nil {
-			return errorsmod.Wrap(err, "check compatibility")
+			return errorsmod.Wrapf(err, "check compatibility: height: %d", h)
 		}
 		atLeastOneMatch = true
 	}

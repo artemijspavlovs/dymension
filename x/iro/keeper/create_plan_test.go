@@ -89,7 +89,7 @@ func (s *KeeperTestSuite) TestCreatePlan() {
 	s.Require().Equal(planId2, fmt.Sprintf("%d", plan.Id))
 
 	// test get all plans
-	plans := k.GetAllPlans(s.Ctx)
+	plans := k.GetAllPlans(s.Ctx, false)
 	s.Require().Len(plans, 2)
 
 	ok := s.App.AccountKeeper.HasAccount(s.Ctx, plan.GetAddress())
@@ -112,7 +112,7 @@ func (s *KeeperTestSuite) TestMintAllocation() {
 	k := s.App.IROKeeper
 
 	allocatedAmount := sdk.NewInt(10).MulRaw(1e18)
-	expectedBaseDenom := fmt.Sprintf("%s_%s", types.IROTokenPrefix, rollappId)
+	expectedBaseDenom := types.IRODenom(rollappId)
 
 	rollapp, _ := s.App.RollappKeeper.GetRollapp(s.Ctx, rollappId)
 	minted, err := k.MintAllocation(s.Ctx, allocatedAmount, rollapp.RollappId, rollapp.GenesisInfo.NativeDenom.Base, uint64(rollapp.GenesisInfo.NativeDenom.Exponent))

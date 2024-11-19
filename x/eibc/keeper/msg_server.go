@@ -123,7 +123,7 @@ func (m msgServer) FulfillOrderAuthorized(goCtx context.Context, msg *types.MsgF
 		return nil, err
 	}
 
-	if err = uevent.EmitTypedEvent(ctx, demandOrder.GetFulfilledEvent()); err != nil {
+	if err = uevent.EmitTypedEvent(ctx, demandOrder.GetFulfilledAuthorizedEvent(demandOrder.CreationHeight, msg.LpAddress)); err != nil {
 		return nil, fmt.Errorf("emit event: %w", err)
 	}
 
@@ -249,6 +249,18 @@ func (m msgServer) GetOutstandingOrder(ctx sdk.Context, orderId string) (*types.
 	demandOrder, err := m.GetDemandOrder(ctx, commontypes.Status_PENDING, orderId)
 	if err != nil {
 		return nil, err
+	}
+
+	// TODO: would be nice if the demand order already has the proofHeight, so we don't have to fetch the packet
+	packet, err := m.dack.GetRollappPacket(ctx, demandOrder.TrackingPacketKey)
+	if err != nil {
+		return nil, err
+	}
+
+	// No error means the order is due to be finalized,
+	// in which case the order is not outstanding anymore
+	if err = m.dack.VerifyHeightFinalized(ctx, demandOrder.RollappId, packet.ProofHeight); err == nil {
+		return nil, types.ErrDemandOrderInactive
 	}
 
 	return demandOrder, demandOrder.ValidateOrderIsOutstanding()

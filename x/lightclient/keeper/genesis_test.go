@@ -1,11 +1,13 @@
 package keeper_test
 
 import (
+	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	keepertest "github.com/dymensionxyz/dymension/v3/testutil/keeper"
 	"github.com/dymensionxyz/dymension/v3/x/lightclient/types"
-	"github.com/stretchr/testify/require"
 )
 
 func TestInitGenesis(t *testing.T) {
@@ -14,14 +16,10 @@ func TestInitGenesis(t *testing.T) {
 		{RollappId: "rollapp-1", IbcClientId: "client-1"},
 		{RollappId: "rollapp-2", IbcClientId: "client-2"},
 	}
-	stateSigners := []types.ConsensusStateSigner{
-		{IbcClientId: "client-1", Height: 1, BlockValHash: "signer-1"},
-		{IbcClientId: "client-1", Height: 2, BlockValHash: "signer-1"},
-	}
 
 	keeper.InitGenesis(ctx, types.GenesisState{
-		CanonicalClients:      clients,
-		ConsensusStateSigners: stateSigners,
+		CanonicalClients: clients,
+		HardForkKeys:     []string{"rollapp-1", "rollapp-2"},
 	})
 
 	ibc, found := keeper.GetCanonicalClient(ctx, "rollapp-1")
@@ -30,13 +28,10 @@ func TestInitGenesis(t *testing.T) {
 	ibc, found = keeper.GetCanonicalClient(ctx, "rollapp-2")
 	require.True(t, found)
 	require.Equal(t, "client-2", ibc)
-
-	signer, found := keeper.GetConsensusStateValHash(ctx, "client-1", 1)
-	require.True(t, found)
-	require.Equal(t, []byte("signer-1"), signer)
-	signer, found = keeper.GetConsensusStateValHash(ctx, "client-1", 2)
-	require.True(t, found)
-	require.Equal(t, []byte("signer-1"), signer)
+	hfks := keeper.ListHardForkKeys(ctx)
+	require.Len(t, hfks, 2)
+	require.Equal(t, "rollapp-1", hfks[0])
+	require.Equal(t, "rollapp-2", hfks[1])
 }
 
 func TestExportGenesis(t *testing.T) {
@@ -44,8 +39,8 @@ func TestExportGenesis(t *testing.T) {
 
 	keeper.SetCanonicalClient(ctx, "rollapp-1", "client-1")
 	keeper.SetCanonicalClient(ctx, "rollapp-2", "client-2")
-	keeper.SetConsensusStateValHash(ctx, "client-1", 1, []byte("signer-1"))
-	keeper.SetConsensusStateValHash(ctx, "client-1", 2, []byte("signer-1"))
+	keeper.SetHardForkInProgress(ctx, "rollapp-1")
+	keeper.SetHardForkInProgress(ctx, "rollapp-2")
 
 	genesis := keeper.ExportGenesis(ctx)
 
@@ -54,11 +49,41 @@ func TestExportGenesis(t *testing.T) {
 	require.Equal(t, "client-2", genesis.CanonicalClients[1].IbcClientId)
 	require.Equal(t, "rollapp-1", genesis.CanonicalClients[0].RollappId)
 	require.Equal(t, "rollapp-2", genesis.CanonicalClients[1].RollappId)
-	require.Len(t, genesis.ConsensusStateSigners, 2)
-	require.Equal(t, "client-1", genesis.ConsensusStateSigners[0].IbcClientId)
-	require.Equal(t, "client-1", genesis.ConsensusStateSigners[1].IbcClientId)
-	require.Equal(t, uint64(1), genesis.ConsensusStateSigners[0].Height)
-	require.Equal(t, uint64(2), genesis.ConsensusStateSigners[1].Height)
-	require.Equal(t, "signer-1", genesis.ConsensusStateSigners[0].BlockValHash)
-	require.Equal(t, "signer-1", genesis.ConsensusStateSigners[1].BlockValHash)
+	require.Len(t, genesis.HardForkKeys, 2)
+	require.Equal(t, "rollapp-1", genesis.HardForkKeys[0])
+	require.Equal(t, "rollapp-2", genesis.HardForkKeys[1])
+}
+
+func TestImportExportGenesis(t *testing.T) {
+	k, ctx := keepertest.LightClientKeeper(t)
+
+	g := types.GenesisState{
+		CanonicalClients: []types.CanonicalClient{
+			{
+				RollappId:   "rollapp-1",
+				IbcClientId: "client-1",
+			},
+			{
+				RollappId:   "rollapp-2",
+				IbcClientId: "client-2",
+			},
+		},
+		HeaderSigners: []types.HeaderSignerEntry{
+			{
+				SequencerAddress: "signer-1",
+				ClientId:         "client-1",
+				Height:           42,
+			},
+			{
+				SequencerAddress: "signer-2",
+				ClientId:         "client-2",
+				Height:           43,
+			},
+		},
+		HardForkKeys: []string{"rollapp-1", "rollapp-2"},
+	}
+
+	k.InitGenesis(ctx, g)
+	compare := k.ExportGenesis(ctx)
+	require.True(t, reflect.DeepEqual(g, compare), "expected %v but got %v", g, compare)
 }

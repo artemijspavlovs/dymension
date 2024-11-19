@@ -1,66 +1,69 @@
 package keeper
 
 import (
+	errorsmod "cosmossdk.io/errors"
 	sdk "github.com/cosmos/cosmos-sdk/types"
-
 	rollapptypes "github.com/dymensionxyz/dymension/v3/x/rollapp/types"
 	"github.com/dymensionxyz/dymension/v3/x/sequencer/types"
+	"github.com/dymensionxyz/gerr-cosmos/gerrc"
 )
 
 var _ rollapptypes.RollappHooks = rollappHook{}
 
-// Hooks wrapper struct for rollapp keeper.
 type rollappHook struct {
 	rollapptypes.StubRollappCreatedHooks
 	k Keeper
 }
 
-// RollappHooks returns the wrapper struct.
 func (k Keeper) RollappHooks() rollapptypes.RollappHooks {
 	return rollappHook{k: k}
 }
 
-// BeforeUpdateState checks various conditions before updating the state.
-// It verifies if the sequencer has been registered, if the rollappId matches the one of the sequencer,
-// if there is a proposer for the given rollappId, and if the sequencer is the active one.
-// If the lastStateUpdateBySequencer flag is true, it also checks if the rollappId is rotating and
-// performs a rotation of the proposer.
-// Returns an error if any of the checks fail, otherwise returns nil.
+// BeforeUpdateState will reject if the caller is not proposer
+// if lastStateUpdateBySequencer is true, validate that the sequencer is in the middle of a rotation
 func (hook rollappHook) BeforeUpdateState(ctx sdk.Context, seqAddr, rollappId string, lastStateUpdateBySequencer bool) error {
-	proposer, ok := hook.k.GetProposer(ctx, rollappId)
-	if !ok {
-		return types.ErrNoProposer
-	}
+	proposer := hook.k.GetProposer(ctx, rollappId)
 	if seqAddr != proposer.Address {
-		return types.ErrNotActiveSequencer
+		return types.ErrNotProposer
 	}
 
-	if lastStateUpdateBySequencer {
-		// last state update received by sequencer
-		// it's expected that the sequencer produced a last block which handovers the proposer role on the L2
-		// any divergence from this is considered fraud
-		err := hook.k.CompleteRotation(ctx, rollappId)
-		if err != nil {
-			return err
-		}
+	// if lastStateUpdateBySequencer is true, validate that the sequencer is in the middle of a rotation
+	if lastStateUpdateBySequencer && !hook.k.AwaitingLastProposerBlock(ctx, rollappId) {
+		return errorsmod.Wrap(gerrc.ErrInvalidArgument, "sequencer is not in the middle of a rotation")
 	}
 
 	return nil
 }
 
-// FraudSubmitted implements the RollappHooks interface
-// It slashes the sequencer and unbonds all other bonded sequencers
-func (hook rollappHook) FraudSubmitted(ctx sdk.Context, rollappID string, height uint64, seqAddr string) error {
-	err := hook.k.JailSequencerOnFraud(ctx, seqAddr)
-	if err != nil {
-		return err
+// AfterUpdateState checks if rotation is completed and the nextProposer is changed
+func (hook rollappHook) AfterUpdateState(ctx sdk.Context, rollappID string, stateInfo *rollapptypes.StateInfo) error {
+	// no proposer changed - no op
+	if stateInfo.Sequencer == stateInfo.NextProposer {
+		return nil
 	}
 
-	// unbond all other other rollapp sequencers
-	err = hook.k.InstantUnbondAllSequencers(ctx, rollappID)
+	// handle proposer rotation completion
+	proposer := hook.k.GetProposer(ctx, rollappID)
+	err := hook.k.OnProposerLastBlock(ctx, proposer)
 	if err != nil {
-		return err
+		return errorsmod.Wrap(err, "on proposer last block")
 	}
+
+	return nil
+}
+
+// OnHardFork implements the RollappHooks interface
+// unbonds all rollapp sequencers
+// slashing / jailing is handled by the caller, outside of this function
+func (hook rollappHook) OnHardFork(ctx sdk.Context, rollappID string, _ uint64) error {
+	err := hook.k.optOutAllSequencers(ctx, rollappID)
+	if err != nil {
+		return errorsmod.Wrap(err, "opt out all sequencers")
+	}
+
+	// clear current proposer and successor
+	hook.k.SetProposer(ctx, rollappID, types.SentinelSeqAddr)
+	hook.k.SetSuccessor(ctx, rollappID, types.SentinelSeqAddr)
 
 	return nil
 }

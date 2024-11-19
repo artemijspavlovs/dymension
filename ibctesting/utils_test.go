@@ -22,6 +22,7 @@ import (
 	channeltypes "github.com/cosmos/ibc-go/v7/modules/core/04-channel/types"
 	ibctesting "github.com/cosmos/ibc-go/v7/testing"
 	"github.com/cosmos/ibc-go/v7/testing/mock"
+	"github.com/cosmos/ibc-go/v7/testing/simapp"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 
@@ -37,11 +38,10 @@ import (
 )
 
 // chainIDPrefix defines the default chain ID prefix for Evmos test chains
-var chainIDPrefix = "evmos_9000-"
+var chainIDPrefix = "evmos_9000"
 
 func init() {
 	ibctesting.ChainIDPrefix = chainIDPrefix
-	ibctesting.ChainIDSuffix = ""
 	ibctesting.DefaultTestingAppInit = func() (ibctesting.TestingApp, map[string]json.RawMessage) {
 		return apptesting.SetupTestingApp()
 	}
@@ -105,11 +105,15 @@ func (s *utilSuite) rollappCtx() sdk.Context {
 }
 
 func (s *utilSuite) rollappMsgServer() rollapptypes.MsgServer {
-	return rollappkeeper.NewMsgServerImpl(*s.hubApp().RollappKeeper)
+	return rollappkeeper.NewMsgServerImpl(s.hubApp().RollappKeeper)
 }
 
 // SetupTest creates a coordinator with 2 test chains.
 func (s *utilSuite) SetupTest() {
+	// this is used as default when creating blocks.
+	// set in the block as the revision number
+	simapp.DefaultAppVersion = 0
+
 	s.coordinator = ibctesting.NewCoordinator(s.T(), 2) // initializes test chains
 	s.coordinator.Chains[rollappChainID()] = s.newTestChainWithSingleValidator(s.T(), s.coordinator, rollappChainID())
 }
@@ -139,7 +143,7 @@ func (s *utilSuite) createRollapp(transfersEnabled bool, channelID *string) {
 			X:           "https://x.dymension.xyz",
 		},
 		&rollapptypes.GenesisInfo{
-			GenesisChecksum: "somechecksum",
+			GenesisChecksum: "checksum",
 			Bech32Prefix:    "ethm",
 			NativeDenom: rollapptypes.DenomMetadata{
 				Display:  "DEN",
@@ -204,6 +208,8 @@ func (s *utilSuite) registerSequencer() {
 			RestApiUrls: []string{"https://api.wpd.evm.rollapp.noisnemyd.xyz:443"},
 		},
 		bond,
+		s.hubChain().SenderAccount.GetAddress().String(),
+		[]string{},
 	)
 	s.Require().NoError(err) // message committed
 	_, err = s.hubChain().SendMsgs(msgCreateSequencer)
@@ -224,9 +230,10 @@ func (s *utilSuite) updateRollappState(endHeight uint64) {
 	blockDescriptors := &rollapptypes.BlockDescriptors{BD: make([]rollapptypes.BlockDescriptor, numBlocks)}
 	for i := uint64(0); i < numBlocks; i++ {
 		blockDescriptors.BD[i] = rollapptypes.BlockDescriptor{
-			Height:    startHeight + i,
-			StateRoot: bytes.Repeat([]byte{byte(startHeight) + byte(i)}, 32),
-			Timestamp: time.Now().UTC(),
+			Height:     startHeight + i,
+			StateRoot:  bytes.Repeat([]byte{byte(startHeight) + byte(i)}, 32),
+			Timestamp:  time.Now().UTC(),
+			DrsVersion: 1,
 		}
 	}
 	// Update the state
@@ -371,16 +378,15 @@ func (s *utilSuite) newTestChainWithSingleValidator(t *testing.T, coord *ibctest
 	return chain
 }
 
-func (s *utilSuite) finalizeRollappPacketsByReceiver(receiver string) sdk.Events {
+func (s *utilSuite) finalizeRollappPacketsByAddress(address string) sdk.Events {
 	s.T().Helper()
-	// Query all pending packets by receiver
+	// Query all pending packets by address
 	querier := delayedackkeeper.NewQuerier(s.hubApp().DelayedAckKeeper)
-	resp, err := querier.GetPendingPacketsByReceiver(s.hubCtx(), &delayedacktypes.QueryPendingPacketsByReceiverRequest{
-		RollappId: rollappChainID(),
-		Receiver:  receiver,
+	resp, err := querier.GetPendingPacketsByAddress(s.hubCtx(), &delayedacktypes.QueryPendingPacketsByAddressRequest{
+		Address: address,
 	})
 	s.Require().NoError(err)
-	// Finalize all packets are collect events
+	// Finalize all packets and collect events
 	events := make(sdk.Events, 0)
 	for _, packet := range resp.RollappPackets {
 		k := common.EncodePacketKey(packet.RollappPacketKey())

@@ -1,9 +1,12 @@
 package v4
 
 import (
+	"slices"
+	"strings"
+
+	errorsmod "cosmossdk.io/errors"
 	"github.com/cometbft/cometbft/crypto"
 	"github.com/cosmos/cosmos-sdk/baseapp"
-
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/module"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
@@ -19,21 +22,21 @@ import (
 	upgradetypes "github.com/cosmos/cosmos-sdk/x/upgrade/types"
 	ibctransfertypes "github.com/cosmos/ibc-go/v7/modules/apps/transfer/types"
 	ibcchannelkeeper "github.com/cosmos/ibc-go/v7/modules/core/04-channel/keeper"
-
 	evmtypes "github.com/evmos/ethermint/x/evm/types"
 	feemarkettypes "github.com/evmos/ethermint/x/feemarket/types"
 	epochskeeper "github.com/osmosis-labs/osmosis/v15/x/epochs/keeper"
 
 	"github.com/dymensionxyz/dymension/v3/app/keepers"
 	"github.com/dymensionxyz/dymension/v3/app/upgrades"
+	commontypes "github.com/dymensionxyz/dymension/v3/x/common/types"
 	delayedackkeeper "github.com/dymensionxyz/dymension/v3/x/delayedack/keeper"
 	delayedacktypes "github.com/dymensionxyz/dymension/v3/x/delayedack/types"
+	dymnskeeper "github.com/dymensionxyz/dymension/v3/x/dymns/keeper"
 	incentiveskeeper "github.com/dymensionxyz/dymension/v3/x/incentives/keeper"
 	incentivestypes "github.com/dymensionxyz/dymension/v3/x/incentives/types"
 	lightclientkeeper "github.com/dymensionxyz/dymension/v3/x/lightclient/keeper"
 	rollappkeeper "github.com/dymensionxyz/dymension/v3/x/rollapp/keeper"
 	rollapptypes "github.com/dymensionxyz/dymension/v3/x/rollapp/types"
-	sequencerkeeper "github.com/dymensionxyz/dymension/v3/x/sequencer/keeper"
 	sequencertypes "github.com/dymensionxyz/dymension/v3/x/sequencer/types"
 	streamerkeeper "github.com/dymensionxyz/dymension/v3/x/streamer/keeper"
 	streamertypes "github.com/dymensionxyz/dymension/v3/x/streamer/types"
@@ -49,16 +52,33 @@ func CreateUpgradeHandler(
 	return func(ctx sdk.Context, _ upgradetypes.Plan, fromVM module.VersionMap) (module.VersionMap, error) {
 		logger := ctx.Logger().With("upgrade", UpgradeName)
 
-		LoadDeprecatedParamsSubspaces(keepers)
+		setKeyTables(keepers)
 
+		// Run migrations before applying any other state changes.
+		// NOTE: DO NOT PUT ANY STATE CHANGES BEFORE RunMigrations().
+		// (This is how osmosis do it)
+		migrations, err := mm.RunMigrations(ctx, configurator, fromVM)
+		if err != nil {
+			return nil, err
+		}
 		migrateModuleParams(ctx, keepers)
-		migrateDelayedAckParams(ctx, keepers.DelayedAckKeeper)
-		migrateRollappParams(ctx, keepers.RollappKeeper)
-		if err := migrateRollapps(ctx, keepers.RollappKeeper); err != nil {
+
+		if err := deprecateCrisisModule(ctx, keepers.CrisisKeeper); err != nil {
 			return nil, err
 		}
 
+		migrateDelayedAckParams(ctx, keepers.DelayedAckKeeper)
+		migrateRollappParams(ctx, keepers.RollappKeeper)
+		if err := migrateRollapps(ctx, keepers.RollappKeeper, keepers.DymNSKeeper); err != nil {
+			return nil, err
+		}
+
+		migrateSequencerParams(ctx, keepers.SequencerKeeper)
+		if err := migrateSequencerIndices(ctx, keepers.SequencerKeeper); err != nil {
+			return nil, errorsmod.Wrap(err, "migrate sequencer indices")
+		}
 		migrateSequencers(ctx, keepers.SequencerKeeper)
+
 		migrateRollappLightClients(ctx, keepers.RollappKeeper, keepers.LightClientKeeper, keepers.IBCKeeper.ChannelKeeper)
 		if err := migrateStreamer(ctx, keepers.StreamerKeeper, keepers.EpochsKeeper); err != nil {
 			return nil, err
@@ -69,22 +89,29 @@ func CreateUpgradeHandler(
 			return nil, err
 		}
 
+		if err := migrateDelayedAckPacketIndex(ctx, keepers.DelayedAckKeeper); err != nil {
+			return nil, err
+		}
+
+		if err := migrateRollappRegisteredDenoms(ctx, keepers.RollappKeeper); err != nil {
+			return nil, err
+		}
+
+		if err := migrateRollappStateInfoNextProposer(ctx, keepers.RollappKeeper, keepers.SequencerKeeper); err != nil {
+			return nil, err
+		}
+
+		if err := migrateRollappFinalizationQueue(ctx, keepers.RollappKeeper); err != nil {
+			return nil, err
+		}
+
 		// Start running the module migrations
 		logger.Debug("running module migrations ...")
-		return mm.RunMigrations(ctx, configurator, fromVM)
+		return migrations, nil
 	}
 }
 
-//nolint:staticcheck
-func migrateModuleParams(ctx sdk.Context, keepers *keepers.AppKeepers) {
-	// Migrate Tendermint consensus parameters from x/params module to a dedicated x/consensus module.
-	baseAppLegacySS := keepers.ParamsKeeper.Subspace(baseapp.Paramspace).WithKeyTable(paramstypes.ConsensusParamsKeyTable())
-	baseapp.MigrateParams(ctx, baseAppLegacySS, &keepers.ConsensusParamsKeeper)
-}
-
-// LoadDeprecatedParamsSubspaces loads the deprecated param subspaces for each module
-// used to support the migration from x/params to each module's own store
-func LoadDeprecatedParamsSubspaces(keepers *keepers.AppKeepers) {
+func setKeyTables(keepers *keepers.AppKeepers) {
 	for _, subspace := range keepers.ParamsKeeper.GetSubspaces() {
 		var keyTable paramstypes.KeyTable
 		switch subspace.Name() {
@@ -110,7 +137,7 @@ func LoadDeprecatedParamsSubspaces(keepers *keepers.AppKeepers) {
 		case rollapptypes.ModuleName:
 			keyTable = rollapptypes.ParamKeyTable()
 		case sequencertypes.ModuleName:
-			keyTable = sequencertypes.ParamKeyTable()
+			continue
 
 		// Ethermint  modules
 		case evmtypes.ModuleName:
@@ -127,17 +154,11 @@ func LoadDeprecatedParamsSubspaces(keepers *keepers.AppKeepers) {
 	}
 }
 
-func migrateDelayedAckParams(ctx sdk.Context, delayedAckKeeper delayedackkeeper.Keeper) {
-	// overwrite params for delayedack module due to added parameters
-	params := delayedacktypes.DefaultParams()
-	delayedAckKeeper.SetParams(ctx, params)
-}
-
-func migrateRollappParams(ctx sdk.Context, rollappkeeper *rollappkeeper.Keeper) {
-	// overwrite params for rollapp module due to proto change
-	params := rollapptypes.DefaultParams()
-	params.DisputePeriodInBlocks = rollappkeeper.DisputePeriodInBlocks(ctx)
-	rollappkeeper.SetParams(ctx, params)
+//nolint:staticcheck
+func migrateModuleParams(ctx sdk.Context, keepers *keepers.AppKeepers) {
+	// Migrate Tendermint consensus parameters from x/params module to a dedicated x/consensus module.
+	baseAppLegacySS := keepers.ParamsKeeper.Subspace(baseapp.Paramspace).WithKeyTable(paramstypes.ConsensusParamsKeyTable())
+	baseapp.MigrateParams(ctx, baseAppLegacySS, &keepers.ConsensusParamsKeeper)
 }
 
 // migrateRollappGauges creates a gauge for each rollapp in the store
@@ -152,7 +173,8 @@ func migrateRollappGauges(ctx sdk.Context, rollappkeeper *rollappkeeper.Keeper, 
 	return nil
 }
 
-func migrateRollapps(ctx sdk.Context, rollappkeeper *rollappkeeper.Keeper) error {
+func migrateRollapps(ctx sdk.Context, rollappkeeper *rollappkeeper.Keeper, dymnsKeeper dymnskeeper.Keeper) error {
+	// in theory, there should be only two rollapps in the store, but we iterate over all of them just in case
 	list := rollappkeeper.GetAllRollapps(ctx)
 	for _, oldRollapp := range list {
 		newRollapp := ConvertOldRollappToNew(oldRollapp)
@@ -160,20 +182,19 @@ func migrateRollapps(ctx sdk.Context, rollappkeeper *rollappkeeper.Keeper) error
 			return err
 		}
 		rollappkeeper.SetRollapp(ctx, newRollapp)
-	}
-	return nil
-}
 
-func migrateSequencers(ctx sdk.Context, sequencerkeeper sequencerkeeper.Keeper) {
-	list := sequencerkeeper.GetAllSequencers(ctx)
-	for _, oldSequencer := range list {
-		newSequencer := ConvertOldSequencerToNew(oldSequencer)
-		sequencerkeeper.SetSequencer(ctx, newSequencer)
-
-		if oldSequencer.Proposer {
-			sequencerkeeper.SetProposer(ctx, oldSequencer.RollappId, oldSequencer.Address)
+		switch oldRollapp.RollappId {
+		case nimRollappID:
+			if err := dymnsKeeper.SetAliasForRollAppId(ctx, oldRollapp.RollappId, nimAlias); err != nil {
+				return err
+			}
+		case mandeRollappID:
+			if err := dymnsKeeper.SetAliasForRollAppId(ctx, oldRollapp.RollappId, mandeAlias); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
 func migrateRollappLightClients(ctx sdk.Context, rollappkeeper *rollappkeeper.Keeper, lightClientKeeper lightclientkeeper.Keeper, ibcChannelKeeper ibcchannelkeeper.Keeper) {
@@ -195,8 +216,13 @@ func migrateRollappLightClients(ctx sdk.Context, rollappkeeper *rollappkeeper.Ke
 	}
 }
 
-// migrateStreamer creates epoch pointers for all epoch infos.
+// migrateStreamer creates epoch pointers for all epoch infos and updates module params
 func migrateStreamer(ctx sdk.Context, sk streamerkeeper.Keeper, ek *epochskeeper.Keeper) error {
+	// update module params
+	params := streamertypes.DefaultParams()
+	sk.SetParams(ctx, params)
+
+	// create epoch pointers for all epoch infos
 	for _, epoch := range ek.AllEpochInfos(ctx) {
 		err := sk.SaveEpochPointer(ctx, streamertypes.NewEpochPointer(epoch.Identifier, epoch.Duration))
 		if err != nil {
@@ -206,26 +232,118 @@ func migrateStreamer(ctx sdk.Context, sk streamerkeeper.Keeper, ek *epochskeeper
 	return nil
 }
 
+func migrateRollappFinalizationQueue(ctx sdk.Context, rk *rollappkeeper.Keeper) error {
+	q := rk.GetAllBlockHeightToFinalizationQueue(ctx)
+
+	// iterate over queues on different heights
+	for _, queue := range q {
+		// convert the queue to the new format
+		newQueues := ReformatFinalizationQueue(queue)
+
+		// save the new queues
+		for _, newQueue := range newQueues {
+			err := rk.SetFinalizationQueue(ctx, newQueue)
+			if err != nil {
+				return err
+			}
+		}
+
+		// remove the old queue
+		rk.RemoveBlockHeightToFinalizationQueue(ctx, queue.CreationHeight)
+	}
+	return nil
+}
+
+// ReformatFinalizationQueue groups the finalization queue by rollapp
+func ReformatFinalizationQueue(queue rollapptypes.BlockHeightToFinalizationQueue) []rollapptypes.BlockHeightToFinalizationQueue {
+	// Map is used for convenient data aggregation.
+	// Later it is converted to a slice and sorted by rollappID, so the output is always deterministic.
+	grouped := make(map[string][]rollapptypes.StateInfoIndex)
+
+	// group indexes by rollapp
+	for _, index := range queue.FinalizationQueue {
+		grouped[index.RollappId] = append(grouped[index.RollappId], index)
+	}
+
+	// cast map to slice
+	queues := make([]rollapptypes.BlockHeightToFinalizationQueue, 0, len(grouped))
+	for rollappID, indexes := range grouped {
+		queues = append(queues, rollapptypes.BlockHeightToFinalizationQueue{
+			CreationHeight:    queue.CreationHeight,
+			FinalizationQueue: indexes,
+			RollappId:         rollappID,
+		})
+	}
+
+	// sort by rollappID
+	slices.SortFunc(queues, func(a, b rollapptypes.BlockHeightToFinalizationQueue) int {
+		return strings.Compare(a.RollappId, b.RollappId)
+	})
+
+	return queues
+}
+
 func migrateIncentivesParams(ctx sdk.Context, ik *incentiveskeeper.Keeper) {
-	params := ik.GetParams(ctx)
-	defaultParams := incentivestypes.DefaultParams()
-	params.CreateGaugeBaseFee = defaultParams.CreateGaugeBaseFee
-	params.AddToGaugeBaseFee = defaultParams.AddToGaugeBaseFee
-	params.AddDenomFee = defaultParams.AddDenomFee
+	params := incentivestypes.DefaultParams()
+	params.DistrEpochIdentifier = ik.DistrEpochIdentifier(ctx)
 	ik.SetParams(ctx, params)
 }
 
+func migrateDelayedAckPacketIndex(ctx sdk.Context, dk delayedackkeeper.Keeper) error {
+	pendingPackets := dk.ListRollappPackets(ctx, delayedacktypes.ByStatus(commontypes.Status_PENDING))
+	for _, packet := range pendingPackets {
+		pd, err := packet.GetTransferPacketData()
+		if err != nil {
+			return err
+		}
+
+		switch packet.Type {
+		case commontypes.RollappPacket_ON_RECV:
+			dk.MustSetPendingPacketByAddress(ctx, pd.Receiver, packet.RollappPacketKey())
+		case commontypes.RollappPacket_ON_ACK, commontypes.RollappPacket_ON_TIMEOUT:
+			dk.MustSetPendingPacketByAddress(ctx, pd.Sender, packet.RollappPacketKey())
+		}
+	}
+	return nil
+}
+
 func ConvertOldRollappToNew(oldRollapp rollapptypes.Rollapp) rollapptypes.Rollapp {
+	genesisInfo := rollapptypes.GenesisInfo{
+		Bech32Prefix:    oldRollapp.RollappId[:5],                            // placeholder data
+		GenesisChecksum: string(crypto.Sha256([]byte(oldRollapp.RollappId))), // placeholder data
+		NativeDenom: rollapptypes.DenomMetadata{
+			Display:  "DEN",  // placeholder data
+			Base:     "aden", // placeholder data
+			Exponent: 18,     // placeholder data
+		},
+		InitialSupply: sdk.NewInt(100000), // placeholder data
+		Sealed:        true,
+	}
+
+	// migrate existing rollapps
+
+	// mainnet
+	if oldRollapp.RollappId == nimRollappID {
+		genesisInfo = nimGenesisInfo
+	}
+	if oldRollapp.RollappId == mandeRollappID {
+		genesisInfo = mandeGenesisInfo
+	}
+
+	// testnet
+	if oldRollapp.RollappId == rollappXRollappID {
+		genesisInfo = rollappXGenesisInfo
+	}
+	if oldRollapp.RollappId == crynuxRollappID {
+		genesisInfo = crynuxGenesisInfo
+	}
+
 	return rollapptypes.Rollapp{
-		RollappId:        oldRollapp.RollappId,
-		Owner:            oldRollapp.Owner,
-		GenesisState:     oldRollapp.GenesisState,
-		ChannelId:        oldRollapp.ChannelId,
-		Frozen:           oldRollapp.Frozen,
-		RegisteredDenoms: oldRollapp.RegisteredDenoms,
-		// TODO: regarding missing data - https://github.com/dymensionxyz/dymension/issues/986
-		VmType: rollapptypes.Rollapp_EVM, // placeholder data
-		Metadata: &rollapptypes.RollappMetadata{
+		RollappId:    oldRollapp.RollappId,
+		Owner:        oldRollapp.Owner,
+		GenesisState: oldRollapp.GenesisState,
+		ChannelId:    oldRollapp.ChannelId,
+		Metadata: &rollapptypes.RollappMetadata{ // Can be updated in runtime
 			Website:     "",
 			Description: "",
 			LogoUrl:     "",
@@ -236,19 +354,17 @@ func ConvertOldRollappToNew(oldRollapp rollapptypes.Rollapp) rollapptypes.Rollap
 			Tagline:     "",
 			FeeDenom:    nil,
 		},
-		GenesisInfo: rollapptypes.GenesisInfo{
-			Bech32Prefix:    oldRollapp.RollappId[:5],                            // placeholder data
-			GenesisChecksum: string(crypto.Sha256([]byte(oldRollapp.RollappId))), // placeholder data
-			NativeDenom: rollapptypes.DenomMetadata{
-				Display:  "DEN",  // placeholder data
-				Base:     "aden", // placeholder data
-				Exponent: 18,     // placeholder data
-			},
-			InitialSupply: sdk.NewInt(100000), // placeholder data
-			Sealed:        true,
-		},
-		InitialSequencer: "*",
-		Launched:         true,
+		GenesisInfo:           genesisInfo,
+		InitialSequencer:      "*",
+		VmType:                rollapptypes.Rollapp_EVM, // EVM for existing rollapps
+		Launched:              true,                     // Existing rollapps are already launched
+		PreLaunchTime:         nil,                      // We can just let it be zero. Existing rollapps are already launched.
+		LivenessEventHeight:   0,                        // Filled lazily in runtime
+		LastStateUpdateHeight: 0,                        // Filled lazily in runtime
+		Revisions: []rollapptypes.Revision{{
+			Number:      0,
+			StartHeight: 0,
+		}},
 	}
 }
 
@@ -261,10 +377,11 @@ func ConvertOldSequencerToNew(old sequencertypes.Sequencer) sequencertypes.Seque
 		RollappId:    old.RollappId,
 		Status:       old.Status,
 		Tokens:       old.Tokens,
+		OptedIn:      true,
+		Proposer:     old.Proposer,
 		Metadata: sequencertypes.SequencerMetadata{
-			Moniker: old.Metadata.Moniker,
-			Details: old.Metadata.Details,
-			// TODO: regarding missing data - https://github.com/dymensionxyz/dymension/issues/987
+			Moniker:     old.Metadata.Moniker,
+			Details:     old.Metadata.Details,
 			P2PSeeds:    nil,
 			Rpcs:        nil,
 			EvmRpcs:     nil,

@@ -22,7 +22,6 @@ func (suite *RollappTestSuite) TestUpdateRollapp() {
 		update          *types.MsgUpdateRollappInformation
 		rollappLaunched bool
 		genInfoSealed   bool
-		frozen          bool
 		expError        error
 		expRollapp      types.Rollapp
 	}{
@@ -52,14 +51,15 @@ func (suite *RollappTestSuite) TestUpdateRollapp() {
 				VmType:           types.Rollapp_EVM,
 				Metadata:         &mockRollappMetadata,
 				GenesisInfo: types.GenesisInfo{
-					Bech32Prefix:    "new",
 					GenesisChecksum: "new_checksum",
-					InitialSupply:   sdk.NewInt(1000),
+					Bech32Prefix:    "new",
 					NativeDenom: types.DenomMetadata{
 						Display:  "DEN",
 						Base:     "aden",
 						Exponent: 18,
 					},
+					InitialSupply:   sdk.NewInt(1000),
+					GenesisAccounts: &types.GenesisAccounts{},
 				},
 			},
 		}, {
@@ -78,15 +78,6 @@ func (suite *RollappTestSuite) TestUpdateRollapp() {
 				InitialSequencer: initialSequencerAddress,
 			},
 			expError: sdkerrors.ErrUnauthorized,
-		}, {
-			name: "Update rollapp: fail - try to update a frozen rollapp",
-			update: &types.MsgUpdateRollappInformation{
-				Owner:            alice,
-				RollappId:        rollappId,
-				InitialSequencer: initialSequencerAddress,
-			},
-			frozen:   true,
-			expError: types.ErrRollappFrozen,
 		}, {
 			name: "Update rollapp: fail - try to update InitialSequencer when launched",
 			update: &types.MsgUpdateRollappInformation{
@@ -161,8 +152,6 @@ func (suite *RollappTestSuite) TestUpdateRollapp() {
 				Owner:            alice,
 				InitialSequencer: "",
 				ChannelId:        "",
-				Frozen:           false,
-				RegisteredDenoms: nil,
 				Launched:         true,
 				VmType:           types.Rollapp_EVM,
 				Metadata:         &mockRollappMetadata,
@@ -174,6 +163,14 @@ func (suite *RollappTestSuite) TestUpdateRollapp() {
 						Display:  "OLD",
 						Base:     "aold",
 						Exponent: 18,
+					},
+					GenesisAccounts: &types.GenesisAccounts{
+						Accounts: []types.GenesisAccount{
+							{
+								Amount:  sdk.NewInt(1000),
+								Address: initialSequencerAddress,
+							},
+						},
 					},
 					Sealed: true,
 				},
@@ -193,8 +190,6 @@ func (suite *RollappTestSuite) TestUpdateRollapp() {
 				Owner:            alice,
 				InitialSequencer: "",
 				ChannelId:        "",
-				Frozen:           false,
-				RegisteredDenoms: nil,
 				Launched:         false,
 				VmType:           types.Rollapp_EVM,
 				Metadata:         &mockRollappMetadata,
@@ -206,6 +201,14 @@ func (suite *RollappTestSuite) TestUpdateRollapp() {
 						Display:  "OLD",
 						Base:     "aold",
 						Exponent: 18,
+					},
+					GenesisAccounts: &types.GenesisAccounts{
+						Accounts: []types.GenesisAccount{
+							{
+								Amount:  sdk.NewInt(1000),
+								Address: initialSequencerAddress,
+							},
+						},
 					},
 					Sealed: false,
 				},
@@ -221,9 +224,7 @@ func (suite *RollappTestSuite) TestUpdateRollapp() {
 				Owner:            alice,
 				InitialSequencer: "",
 				ChannelId:        "",
-				Frozen:           tc.frozen,
 				Launched:         tc.rollappLaunched,
-				RegisteredDenoms: nil,
 				VmType:           types.Rollapp_EVM,
 				Metadata: &types.RollappMetadata{
 					Website:     "",
@@ -233,15 +234,23 @@ func (suite *RollappTestSuite) TestUpdateRollapp() {
 					X:           "",
 				},
 				GenesisInfo: types.GenesisInfo{
-					Bech32Prefix:    "old",
 					GenesisChecksum: "old",
-					InitialSupply:   sdk.NewInt(1000),
+					Bech32Prefix:    "old",
 					NativeDenom: types.DenomMetadata{
 						Display:  "OLD",
 						Base:     "aold",
 						Exponent: 18,
 					},
-					Sealed: tc.genInfoSealed,
+					InitialSupply: sdk.NewInt(1000),
+					Sealed:        tc.genInfoSealed,
+					GenesisAccounts: &types.GenesisAccounts{
+						Accounts: []types.GenesisAccount{
+							{
+								Amount:  sdk.NewInt(1000),
+								Address: initialSequencerAddress,
+							},
+						},
+					},
 				},
 			}
 
@@ -305,10 +314,9 @@ func (suite *RollappTestSuite) TestCreateAndUpdateRollapp() {
 	// from this point on, the rollapp is launched and immutable fields cannot be updated
 	err = suite.CreateSequencerByPubkey(suite.Ctx, rollappId, initSeqPubKey)
 	suite.Require().NoError(err)
-	initSeq, ok := suite.App.SequencerKeeper.GetSequencer(suite.Ctx, addrInit)
-	suite.Require().True(ok)
-	proposer, found := suite.App.SequencerKeeper.GetProposer(suite.Ctx, rollappId)
-	suite.Require().True(found)
+	initSeq, err := suite.App.SequencerKeeper.RealSequencer(suite.Ctx, addrInit)
+	suite.Require().NoError(err)
+	proposer := suite.App.SequencerKeeper.GetProposer(suite.Ctx, rollappId)
 	suite.Require().Equal(initSeq, proposer)
 	rollapp, ok := suite.App.RollappKeeper.GetRollapp(suite.Ctx, rollappId)
 	suite.Require().True(ok)
@@ -324,8 +332,7 @@ func (suite *RollappTestSuite) TestCreateAndUpdateRollapp() {
 
 	// 6. register another sequencer - should not be proposer
 	newSeqAddr := suite.CreateDefaultSequencer(suite.Ctx, rollappId)
-	proposer, found = suite.App.SequencerKeeper.GetProposer(suite.Ctx, rollappId)
-	suite.Require().True(found)
+	proposer = suite.App.SequencerKeeper.GetProposer(suite.Ctx, rollappId)
 	suite.Require().NotEqual(proposer, newSeqAddr)
 
 	// 7. create state update
@@ -364,7 +371,7 @@ func (suite *RollappTestSuite) TestCreateAndUpdateRollapp() {
 		Metadata: metadata,
 	})
 	suite.Require().NoError(err)
-	initSeq, ok = suite.App.SequencerKeeper.GetSequencer(suite.Ctx, addrInit)
-	suite.Require().True(ok)
+	initSeq, err = suite.App.SequencerKeeper.RealSequencer(suite.Ctx, addrInit)
+	suite.Require().NoError(err)
 	suite.Require().Equal(metadata, initSeq.Metadata)
 }

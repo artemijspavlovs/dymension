@@ -35,28 +35,28 @@ const _ = proto.GoGoProtoPackageIsVersion3 // please upgrade the proto package
 // Sequencer defines a sequencer identified by its' address (sequencerAddress).
 // The sequencer could be attached to only one rollapp (rollappId).
 type Sequencer struct {
-	// address is the bech32-encoded address of the sequencer account which is the account that the message was sent from.
+	// Address is the bech32-encoded address of the sequencer account which is the account that the message was sent from.
 	Address string `protobuf:"bytes,1,opt,name=address,proto3" json:"address,omitempty"`
-	// pubkey is the public key of the sequencers' dymint client, as a Protobuf Any.
+	// DymintPubKey is the public key of the sequencers' dymint client, as a Protobuf Any.
 	DymintPubKey *types.Any `protobuf:"bytes,2,opt,name=dymintPubKey,proto3" json:"dymintPubKey,omitempty"`
-	// rollappId defines the rollapp to which the sequencer belongs.
+	// RollappId defines the rollapp to which the sequencer belongs.
 	RollappId string `protobuf:"bytes,3,opt,name=rollappId,proto3" json:"rollappId,omitempty"`
-	// metadata defines the extra information for the sequencer.
+	// SequencerMetadata defines the extra information for the sequencer.
 	Metadata SequencerMetadata `protobuf:"bytes,4,opt,name=metadata,proto3" json:"metadata"`
-	// jailed defined whether the sequencer has been jailed from bonded status or not.
-	Jailed   bool `protobuf:"varint,5,opt,name=jailed,proto3" json:"jailed,omitempty"`
-	Proposer bool `protobuf:"varint,6,opt,name=proposer,proto3" json:"proposer,omitempty"` // Deprecated: Do not use.
-	// status is the sequencer status (bonded/unbonding/unbonded).
+	Proposer bool              `protobuf:"varint,6,opt,name=proposer,proto3" json:"proposer,omitempty"` // Deprecated: Do not use.
+	// OperatingStatus is the sequencer status (bonded/unbonded).
 	Status OperatingStatus `protobuf:"varint,7,opt,name=status,proto3,enum=dymensionxyz.dymension.sequencer.OperatingStatus" json:"status,omitempty"`
-	// tokens define the delegated tokens (incl. self-delegation).
+	// OptedIn : when true and bonded, the sequencer can be chosen as proposer or successor
+	// has no effect if already proposer or successor
+	OptedIn bool `protobuf:"varint,14,opt,name=opted_in,json=optedIn,proto3" json:"opted_in,omitempty"`
+	// Tokens: A coins which should always be one dym coin. It's the amount of tokens the sequencer has given to the module.
 	Tokens github_com_cosmos_cosmos_sdk_types.Coins `protobuf:"bytes,8,rep,name=tokens,proto3,castrepeated=github.com/cosmos/cosmos-sdk/types.Coins" json:"tokens"`
-	// unbond_request_height stores the height at which this sequencer has
-	// requested to unbond.
-	UnbondRequestHeight int64 `protobuf:"varint,9,opt,name=unbond_request_height,json=unbondRequestHeight,proto3" json:"unbond_request_height,omitempty"`
-	// unbond_time defines the time when the sequencer will complete unbonding.
-	UnbondTime time.Time `protobuf:"bytes,10,opt,name=unbond_time,json=unbondTime,proto3,stdtime" json:"unbond_time"`
-	// notice_period_time defines the time when the sequencer will finish it's notice period if started
+	// NoticePeriodTime defines the time when the sequencer will finish it's notice period. Zero means not started.
 	NoticePeriodTime time.Time `protobuf:"bytes,11,opt,name=notice_period_time,json=noticePeriodTime,proto3,stdtime" json:"notice_period_time"`
+	// RewardAddr is a bech32 encoded sdk acc address
+	RewardAddr string `protobuf:"bytes,12,opt,name=reward_addr,json=rewardAddr,proto3" json:"reward_addr,omitempty"`
+	// WhitelistedRelayers is an array of the whitelisted relayer addresses. Addresses are bech32-encoded strings.
+	WhitelistedRelayers []string `protobuf:"bytes,13,rep,name=whitelisted_relayers,json=whitelistedRelayers,proto3" json:"whitelisted_relayers,omitempty"`
 }
 
 func (m *Sequencer) Reset()         { *m = Sequencer{} }
@@ -120,13 +120,6 @@ func (m *Sequencer) GetMetadata() SequencerMetadata {
 	return SequencerMetadata{}
 }
 
-func (m *Sequencer) GetJailed() bool {
-	if m != nil {
-		return m.Jailed
-	}
-	return false
-}
-
 // Deprecated: Do not use.
 func (m *Sequencer) GetProposer() bool {
 	if m != nil {
@@ -142,25 +135,18 @@ func (m *Sequencer) GetStatus() OperatingStatus {
 	return Unbonded
 }
 
+func (m *Sequencer) GetOptedIn() bool {
+	if m != nil {
+		return m.OptedIn
+	}
+	return false
+}
+
 func (m *Sequencer) GetTokens() github_com_cosmos_cosmos_sdk_types.Coins {
 	if m != nil {
 		return m.Tokens
 	}
 	return nil
-}
-
-func (m *Sequencer) GetUnbondRequestHeight() int64 {
-	if m != nil {
-		return m.UnbondRequestHeight
-	}
-	return 0
-}
-
-func (m *Sequencer) GetUnbondTime() time.Time {
-	if m != nil {
-		return m.UnbondTime
-	}
-	return time.Time{}
 }
 
 func (m *Sequencer) GetNoticePeriodTime() time.Time {
@@ -170,73 +156,22 @@ func (m *Sequencer) GetNoticePeriodTime() time.Time {
 	return time.Time{}
 }
 
-// BondReduction defines an object which holds the information about the sequencer and its queued unbonding amount
-type BondReduction struct {
-	// sequencer_address is the bech32-encoded address of the sequencer account which is the account that the message was sent from.
-	SequencerAddress string `protobuf:"bytes,1,opt,name=sequencer_address,json=sequencerAddress,proto3" json:"sequencer_address,omitempty"`
-	// decrease_bond_amount is the amount of tokens to be unbonded.
-	DecreaseBondAmount types1.Coin `protobuf:"bytes,2,opt,name=decrease_bond_amount,json=decreaseBondAmount,proto3" json:"decrease_bond_amount"`
-	// decrease_bond_time defines, if unbonding, the min time for the sequencer to complete unbonding.
-	DecreaseBondTime time.Time `protobuf:"bytes,3,opt,name=decrease_bond_time,json=decreaseBondTime,proto3,stdtime" json:"decrease_bond_time"`
-}
-
-func (m *BondReduction) Reset()         { *m = BondReduction{} }
-func (m *BondReduction) String() string { return proto.CompactTextString(m) }
-func (*BondReduction) ProtoMessage()    {}
-func (*BondReduction) Descriptor() ([]byte, []int) {
-	return fileDescriptor_997b8663a5fc0f58, []int{1}
-}
-func (m *BondReduction) XXX_Unmarshal(b []byte) error {
-	return m.Unmarshal(b)
-}
-func (m *BondReduction) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	if deterministic {
-		return xxx_messageInfo_BondReduction.Marshal(b, m, deterministic)
-	} else {
-		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
-		if err != nil {
-			return nil, err
-		}
-		return b[:n], nil
-	}
-}
-func (m *BondReduction) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_BondReduction.Merge(m, src)
-}
-func (m *BondReduction) XXX_Size() int {
-	return m.Size()
-}
-func (m *BondReduction) XXX_DiscardUnknown() {
-	xxx_messageInfo_BondReduction.DiscardUnknown(m)
-}
-
-var xxx_messageInfo_BondReduction proto.InternalMessageInfo
-
-func (m *BondReduction) GetSequencerAddress() string {
+func (m *Sequencer) GetRewardAddr() string {
 	if m != nil {
-		return m.SequencerAddress
+		return m.RewardAddr
 	}
 	return ""
 }
 
-func (m *BondReduction) GetDecreaseBondAmount() types1.Coin {
+func (m *Sequencer) GetWhitelistedRelayers() []string {
 	if m != nil {
-		return m.DecreaseBondAmount
+		return m.WhitelistedRelayers
 	}
-	return types1.Coin{}
-}
-
-func (m *BondReduction) GetDecreaseBondTime() time.Time {
-	if m != nil {
-		return m.DecreaseBondTime
-	}
-	return time.Time{}
+	return nil
 }
 
 func init() {
 	proto.RegisterType((*Sequencer)(nil), "dymensionxyz.dymension.sequencer.Sequencer")
-	proto.RegisterType((*BondReduction)(nil), "dymensionxyz.dymension.sequencer.BondReduction")
 }
 
 func init() {
@@ -244,48 +179,45 @@ func init() {
 }
 
 var fileDescriptor_997b8663a5fc0f58 = []byte{
-	// 645 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x94, 0x53, 0x41, 0x6f, 0xd3, 0x30,
-	0x18, 0x6d, 0xd6, 0xad, 0x6b, 0x5d, 0x40, 0xc3, 0x14, 0xc8, 0x26, 0x94, 0x56, 0x3b, 0x45, 0x42,
-	0x73, 0xd6, 0x4e, 0x82, 0xf3, 0x82, 0x90, 0x98, 0x10, 0x62, 0x64, 0x70, 0xe1, 0x12, 0x39, 0x89,
-	0xc9, 0xc2, 0x1a, 0x3b, 0xc4, 0xce, 0xb4, 0xf0, 0x2b, 0xf6, 0x27, 0xb8, 0x70, 0xe6, 0x47, 0x4c,
-	0x9c, 0x76, 0xe4, 0xc4, 0xd0, 0xfa, 0x47, 0x90, 0x1d, 0x27, 0xeb, 0x40, 0x50, 0xed, 0x94, 0x7c,
-	0x7e, 0xdf, 0x7b, 0xf9, 0xbe, 0xe7, 0x17, 0xb0, 0x1d, 0x95, 0x29, 0xa1, 0x3c, 0x61, 0xf4, 0xa4,
-	0xfc, 0xec, 0x34, 0x85, 0xc3, 0xc9, 0xa7, 0x82, 0xd0, 0x90, 0xe4, 0x57, 0x6f, 0x28, 0xcb, 0x99,
-	0x60, 0x70, 0x34, 0xcf, 0x40, 0x4d, 0x81, 0x9a, 0xbe, 0x8d, 0xf5, 0x90, 0xf1, 0x94, 0x71, 0x5f,
-	0xf5, 0x3b, 0x55, 0x51, 0x91, 0x37, 0xd6, 0x63, 0xc6, 0xe2, 0x29, 0x71, 0x54, 0x15, 0x14, 0x1f,
-	0x1c, 0x4c, 0x4b, 0x0d, 0x0d, 0x62, 0x16, 0xb3, 0x8a, 0x22, 0xdf, 0xf4, 0xe9, 0xf0, 0x4f, 0x82,
-	0x48, 0x52, 0xc2, 0x05, 0x4e, 0x33, 0xdd, 0x60, 0x55, 0xfa, 0x4e, 0x80, 0x39, 0x71, 0x8e, 0xc7,
-	0x01, 0x11, 0x78, 0xec, 0x84, 0x2c, 0xa1, 0x1a, 0x7f, 0xa8, 0xf1, 0x94, 0xc7, 0xce, 0xf1, 0x58,
-	0x3e, 0x34, 0xe0, 0x2c, 0xdc, 0x3c, 0x25, 0x02, 0x47, 0x58, 0x60, 0x4d, 0x78, 0xba, 0x90, 0xc0,
-	0x32, 0x92, 0x63, 0x91, 0xd0, 0xd8, 0xe7, 0x02, 0x8b, 0x42, 0x2f, 0xbd, 0xf9, 0x65, 0x05, 0xf4,
-	0x0e, 0xea, 0x26, 0x68, 0x82, 0x55, 0x1c, 0x45, 0x39, 0xe1, 0xdc, 0x34, 0x46, 0x86, 0xdd, 0xf3,
-	0xea, 0x12, 0x7a, 0xe0, 0x56, 0x54, 0xa6, 0x09, 0x15, 0xfb, 0x45, 0xf0, 0x92, 0x94, 0xe6, 0xd2,
-	0xc8, 0xb0, 0xfb, 0x93, 0x01, 0xaa, 0x2c, 0x40, 0xb5, 0x05, 0x68, 0x97, 0x96, 0xae, 0xf9, 0xfd,
-	0xdb, 0xd6, 0x40, 0x5b, 0x1b, 0xe6, 0x65, 0x26, 0x18, 0xaa, 0x58, 0xde, 0x35, 0x0d, 0xf8, 0x08,
-	0xf4, 0x72, 0x36, 0x9d, 0xe2, 0x2c, 0xdb, 0x8b, 0xcc, 0xb6, 0xfa, 0xde, 0xd5, 0x01, 0x7c, 0x07,
-	0xba, 0xf5, 0x92, 0xe6, 0xb2, 0xfa, 0xda, 0x0e, 0x5a, 0x74, 0xbd, 0xa8, 0x59, 0xe5, 0x95, 0xa6,
-	0xba, 0xcb, 0x67, 0x3f, 0x87, 0x2d, 0xaf, 0x91, 0x82, 0x0f, 0x40, 0xe7, 0x23, 0x4e, 0xa6, 0x24,
-	0x32, 0x57, 0x46, 0x86, 0xdd, 0xf5, 0x74, 0x05, 0x2d, 0xd0, 0xcd, 0x72, 0x96, 0x31, 0x4e, 0x72,
-	0xb3, 0x23, 0x11, 0x77, 0xc9, 0x34, 0xbc, 0xe6, 0x0c, 0xee, 0x81, 0x4e, 0x65, 0x9c, 0xb9, 0x3a,
-	0x32, 0xec, 0x3b, 0x93, 0xf1, 0xe2, 0x61, 0x5e, 0xd7, 0x96, 0x1f, 0x28, 0xa2, 0xa7, 0x05, 0x60,
-	0x08, 0x3a, 0x82, 0x1d, 0x11, 0xca, 0xcd, 0xee, 0xa8, 0x6d, 0xf7, 0x27, 0xeb, 0x48, 0x9b, 0x25,
-	0x73, 0x82, 0x74, 0x4e, 0xd0, 0x33, 0x96, 0x50, 0x77, 0x5b, 0x4e, 0xff, 0xf5, 0x62, 0x68, 0xc7,
-	0x89, 0x38, 0x2c, 0x02, 0x14, 0xb2, 0x54, 0x87, 0x56, 0x3f, 0xb6, 0x78, 0x74, 0xe4, 0x88, 0x32,
-	0x23, 0x5c, 0x11, 0xb8, 0xa7, 0xa5, 0xe1, 0x04, 0xdc, 0x2f, 0x68, 0xc0, 0x68, 0xe4, 0xe7, 0x72,
-	0x20, 0x2e, 0xfc, 0x43, 0x92, 0xc4, 0x87, 0xc2, 0xec, 0x8d, 0x0c, 0xbb, 0xed, 0xdd, 0xab, 0x40,
-	0xaf, 0xc2, 0x5e, 0x28, 0x08, 0x3e, 0x07, 0x7d, 0xcd, 0x91, 0x49, 0x36, 0x81, 0x72, 0x7d, 0xe3,
-	0xaf, 0x3b, 0x7e, 0x5b, 0xc7, 0xdc, 0xed, 0xca, 0xf1, 0x4e, 0x2f, 0x86, 0x86, 0x07, 0x2a, 0xa2,
-	0x84, 0xa0, 0x07, 0x20, 0x65, 0x22, 0x09, 0x89, 0x9f, 0x91, 0x3c, 0x61, 0x5a, 0xad, 0x7f, 0x03,
-	0xb5, 0xb5, 0x8a, 0xbf, 0xaf, 0xe8, 0xb2, 0x61, 0x73, 0x66, 0x80, 0xdb, 0xae, 0x1a, 0x38, 0x2a,
-	0x42, 0x91, 0x30, 0x0a, 0x1f, 0x83, 0xbb, 0x8d, 0xd5, 0xfe, 0xf5, 0xd4, 0xae, 0x35, 0xc0, 0xae,
-	0x8e, 0xef, 0x1b, 0x30, 0x88, 0x48, 0x98, 0x13, 0xcc, 0x89, 0xaf, 0x16, 0xc4, 0x29, 0x2b, 0xa8,
-	0xd0, 0x31, 0xfe, 0xcf, 0x05, 0x54, 0xf1, 0x81, 0x35, 0x59, 0x8e, 0xb0, 0xab, 0xa8, 0x72, 0xcb,
-	0xeb, 0x92, 0x6a, 0xcb, 0xf6, 0x4d, 0xb6, 0x9c, 0x57, 0x95, 0x0d, 0xee, 0xfe, 0xd9, 0xa5, 0x65,
-	0x9c, 0x5f, 0x5a, 0xc6, 0xaf, 0x4b, 0xcb, 0x38, 0x9d, 0x59, 0xad, 0xf3, 0x99, 0xd5, 0xfa, 0x31,
-	0xb3, 0x5a, 0xef, 0x9f, 0xcc, 0x05, 0xe0, 0x1f, 0xff, 0xfa, 0xf1, 0x8e, 0x73, 0x32, 0xf7, 0xc3,
-	0xab, 0x50, 0x04, 0x1d, 0x35, 0xc1, 0xce, 0xef, 0x00, 0x00, 0x00, 0xff, 0xff, 0xeb, 0x84, 0x3a,
-	0x6a, 0x4c, 0x05, 0x00, 0x00,
+	// 597 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x84, 0x52, 0xcd, 0x4e, 0x1b, 0x3d,
+	0x14, 0xcd, 0x40, 0x08, 0x13, 0x87, 0x0f, 0x45, 0xfe, 0x22, 0xd5, 0x41, 0xd5, 0x64, 0xd4, 0xd5,
+	0x6c, 0xf0, 0x10, 0x90, 0xda, 0x35, 0xe9, 0x0a, 0xaa, 0xaa, 0x68, 0x68, 0x37, 0xdd, 0x44, 0xce,
+	0xd8, 0x1d, 0x2c, 0x32, 0xf6, 0xd4, 0x76, 0x80, 0xe9, 0x53, 0x20, 0xf5, 0x2d, 0xba, 0xee, 0x43,
+	0xa0, 0xae, 0x58, 0x76, 0x55, 0x2a, 0x78, 0x91, 0x6a, 0x3c, 0x4e, 0x48, 0x5b, 0x55, 0x59, 0xd9,
+	0xf7, 0xe7, 0xdc, 0xab, 0x73, 0xee, 0x01, 0x7b, 0xb4, 0xcc, 0x99, 0xd0, 0x5c, 0x8a, 0xab, 0xf2,
+	0x53, 0xbc, 0x08, 0x62, 0xcd, 0x3e, 0xce, 0x98, 0x48, 0x99, 0x7a, 0xfc, 0xe1, 0x42, 0x49, 0x23,
+	0x61, 0xb8, 0x8c, 0xc0, 0x8b, 0x00, 0x2f, 0xfa, 0x76, 0xfa, 0xa9, 0xd4, 0xb9, 0xd4, 0x63, 0xdb,
+	0x1f, 0xd7, 0x41, 0x0d, 0xde, 0xe9, 0x67, 0x52, 0x66, 0x53, 0x16, 0xdb, 0x68, 0x32, 0xfb, 0x10,
+	0x13, 0x51, 0xba, 0x52, 0x2f, 0x93, 0x99, 0xac, 0x21, 0xd5, 0xcf, 0x65, 0x07, 0x7f, 0x02, 0x0c,
+	0xcf, 0x99, 0x36, 0x24, 0x2f, 0x5c, 0x43, 0x50, 0xcf, 0x8f, 0x27, 0x44, 0xb3, 0xf8, 0x62, 0x38,
+	0x61, 0x86, 0x0c, 0xe3, 0x54, 0x72, 0xe1, 0xea, 0x4f, 0x5c, 0x3d, 0xd7, 0x59, 0x7c, 0x31, 0xac,
+	0x1e, 0x57, 0x88, 0x57, 0x32, 0xcf, 0x99, 0x21, 0x94, 0x18, 0xe2, 0x00, 0x2f, 0x56, 0x02, 0x64,
+	0xc1, 0x14, 0x31, 0x5c, 0x64, 0x63, 0x6d, 0x88, 0x99, 0x39, 0xd2, 0xcf, 0x3e, 0x6f, 0x80, 0xf6,
+	0xe9, 0xbc, 0x09, 0x22, 0xb0, 0x49, 0x28, 0x55, 0x4c, 0x6b, 0xe4, 0x85, 0x5e, 0xd4, 0x4e, 0xe6,
+	0x21, 0x4c, 0xc0, 0x16, 0x2d, 0x73, 0x2e, 0xcc, 0xc9, 0x6c, 0xf2, 0x8a, 0x95, 0x68, 0x2d, 0xf4,
+	0xa2, 0xce, 0x7e, 0x0f, 0xd7, 0x12, 0xe0, 0xb9, 0x04, 0xf8, 0x50, 0x94, 0x23, 0xf4, 0xed, 0xeb,
+	0x6e, 0xcf, 0x49, 0x9b, 0xaa, 0xb2, 0x30, 0x12, 0xd7, 0xa8, 0xe4, 0xb7, 0x19, 0xf0, 0x29, 0x68,
+	0x2b, 0x39, 0x9d, 0x92, 0xa2, 0x38, 0xa2, 0x68, 0xdd, 0xee, 0x7b, 0x4c, 0xc0, 0x77, 0xc0, 0x9f,
+	0x93, 0x44, 0x4d, 0xbb, 0xed, 0x00, 0xaf, 0x3a, 0x2f, 0x5e, 0x50, 0x79, 0xed, 0xa0, 0xa3, 0xe6,
+	0xcd, 0x8f, 0x41, 0x23, 0x59, 0x8c, 0x82, 0x01, 0xf0, 0x0b, 0x25, 0x0b, 0xa9, 0x99, 0x42, 0xad,
+	0xd0, 0x8b, 0xfc, 0xd1, 0x1a, 0xf2, 0x92, 0x45, 0x0e, 0x1e, 0x81, 0x56, 0x2d, 0x10, 0xda, 0x0c,
+	0xbd, 0x68, 0x7b, 0x7f, 0xb8, 0x7a, 0xe9, 0x9b, 0xb9, 0xb4, 0xa7, 0x16, 0x98, 0xb8, 0x01, 0xb0,
+	0x0f, 0x7c, 0x59, 0x18, 0x46, 0xc7, 0x5c, 0xa0, 0xed, 0x6a, 0x55, 0xb2, 0x69, 0xe3, 0x23, 0x01,
+	0x53, 0xd0, 0x32, 0xf2, 0x9c, 0x09, 0x8d, 0xfc, 0x70, 0x3d, 0xea, 0xec, 0xf7, 0xb1, 0xd3, 0xab,
+	0xb2, 0x0a, 0x76, 0x56, 0xc1, 0x2f, 0x25, 0x17, 0xa3, 0xbd, 0x8a, 0xc0, 0x97, 0xbb, 0x41, 0x94,
+	0x71, 0x73, 0x36, 0x9b, 0xe0, 0x54, 0xe6, 0xce, 0xb7, 0xee, 0xd9, 0xd5, 0xf4, 0x3c, 0x36, 0x65,
+	0xc1, 0xb4, 0x05, 0xe8, 0xc4, 0x8d, 0x86, 0x09, 0x80, 0x42, 0x1a, 0x9e, 0xb2, 0x71, 0xc1, 0x14,
+	0x97, 0x74, 0x5c, 0xf9, 0x13, 0x75, 0xac, 0x96, 0x3b, 0x7f, 0x5d, 0xee, 0xed, 0xdc, 0xbc, 0x23,
+	0xbf, 0xda, 0x78, 0x7d, 0x37, 0xf0, 0x92, 0x6e, 0x8d, 0x3f, 0xb1, 0xf0, 0xaa, 0x01, 0x0e, 0x40,
+	0x47, 0xb1, 0x4b, 0xa2, 0xe8, 0xb8, 0x72, 0x06, 0xda, 0xb2, 0x57, 0x03, 0x75, 0xea, 0x90, 0x52,
+	0x05, 0x87, 0xa0, 0x77, 0x79, 0xc6, 0x0d, 0x9b, 0x72, 0x5d, 0x51, 0x57, 0x6c, 0x4a, 0x4a, 0xa6,
+	0x34, 0xfa, 0x2f, 0x5c, 0x8f, 0xda, 0xc9, 0xff, 0x4b, 0xb5, 0xc4, 0x95, 0x8e, 0x9b, 0xfe, 0x46,
+	0xb7, 0x75, 0xdc, 0xf4, 0xdb, 0x5d, 0x70, 0xdc, 0xf4, 0x41, 0xb7, 0x33, 0x3a, 0xb9, 0xb9, 0x0f,
+	0xbc, 0xdb, 0xfb, 0xc0, 0xfb, 0x79, 0x1f, 0x78, 0xd7, 0x0f, 0x41, 0xe3, 0xf6, 0x21, 0x68, 0x7c,
+	0x7f, 0x08, 0x1a, 0xef, 0x9f, 0x2f, 0xa9, 0xf0, 0x0f, 0xcf, 0x5f, 0x1c, 0xc4, 0x57, 0x4b, 0xc6,
+	0xb7, 0xca, 0x4c, 0x5a, 0x96, 0xe7, 0xc1, 0xaf, 0x00, 0x00, 0x00, 0xff, 0xff, 0x4c, 0x22, 0x5c,
+	0x9a, 0x54, 0x04, 0x00, 0x00,
 }
 
 func (m *Sequencer) Marshal() (dAtA []byte, err error) {
@@ -308,6 +240,32 @@ func (m *Sequencer) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
+	if m.OptedIn {
+		i--
+		if m.OptedIn {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x70
+	}
+	if len(m.WhitelistedRelayers) > 0 {
+		for iNdEx := len(m.WhitelistedRelayers) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.WhitelistedRelayers[iNdEx])
+			copy(dAtA[i:], m.WhitelistedRelayers[iNdEx])
+			i = encodeVarintSequencer(dAtA, i, uint64(len(m.WhitelistedRelayers[iNdEx])))
+			i--
+			dAtA[i] = 0x6a
+		}
+	}
+	if len(m.RewardAddr) > 0 {
+		i -= len(m.RewardAddr)
+		copy(dAtA[i:], m.RewardAddr)
+		i = encodeVarintSequencer(dAtA, i, uint64(len(m.RewardAddr)))
+		i--
+		dAtA[i] = 0x62
+	}
 	n1, err1 := github_com_cosmos_gogoproto_types.StdTimeMarshalTo(m.NoticePeriodTime, dAtA[i-github_com_cosmos_gogoproto_types.SizeOfStdTime(m.NoticePeriodTime):])
 	if err1 != nil {
 		return 0, err1
@@ -316,19 +274,6 @@ func (m *Sequencer) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i = encodeVarintSequencer(dAtA, i, uint64(n1))
 	i--
 	dAtA[i] = 0x5a
-	n2, err2 := github_com_cosmos_gogoproto_types.StdTimeMarshalTo(m.UnbondTime, dAtA[i-github_com_cosmos_gogoproto_types.SizeOfStdTime(m.UnbondTime):])
-	if err2 != nil {
-		return 0, err2
-	}
-	i -= n2
-	i = encodeVarintSequencer(dAtA, i, uint64(n2))
-	i--
-	dAtA[i] = 0x52
-	if m.UnbondRequestHeight != 0 {
-		i = encodeVarintSequencer(dAtA, i, uint64(m.UnbondRequestHeight))
-		i--
-		dAtA[i] = 0x48
-	}
 	if len(m.Tokens) > 0 {
 		for iNdEx := len(m.Tokens) - 1; iNdEx >= 0; iNdEx-- {
 			{
@@ -357,16 +302,6 @@ func (m *Sequencer) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		}
 		i--
 		dAtA[i] = 0x30
-	}
-	if m.Jailed {
-		i--
-		if m.Jailed {
-			dAtA[i] = 1
-		} else {
-			dAtA[i] = 0
-		}
-		i--
-		dAtA[i] = 0x28
 	}
 	{
 		size, err := m.Metadata.MarshalToSizedBuffer(dAtA[:i])
@@ -407,54 +342,6 @@ func (m *Sequencer) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
-func (m *BondReduction) Marshal() (dAtA []byte, err error) {
-	size := m.Size()
-	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
-	if err != nil {
-		return nil, err
-	}
-	return dAtA[:n], nil
-}
-
-func (m *BondReduction) MarshalTo(dAtA []byte) (int, error) {
-	size := m.Size()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *BondReduction) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
-	_ = i
-	var l int
-	_ = l
-	n5, err5 := github_com_cosmos_gogoproto_types.StdTimeMarshalTo(m.DecreaseBondTime, dAtA[i-github_com_cosmos_gogoproto_types.SizeOfStdTime(m.DecreaseBondTime):])
-	if err5 != nil {
-		return 0, err5
-	}
-	i -= n5
-	i = encodeVarintSequencer(dAtA, i, uint64(n5))
-	i--
-	dAtA[i] = 0x1a
-	{
-		size, err := m.DecreaseBondAmount.MarshalToSizedBuffer(dAtA[:i])
-		if err != nil {
-			return 0, err
-		}
-		i -= size
-		i = encodeVarintSequencer(dAtA, i, uint64(size))
-	}
-	i--
-	dAtA[i] = 0x12
-	if len(m.SequencerAddress) > 0 {
-		i -= len(m.SequencerAddress)
-		copy(dAtA[i:], m.SequencerAddress)
-		i = encodeVarintSequencer(dAtA, i, uint64(len(m.SequencerAddress)))
-		i--
-		dAtA[i] = 0xa
-	}
-	return len(dAtA) - i, nil
-}
-
 func encodeVarintSequencer(dAtA []byte, offset int, v uint64) int {
 	offset -= sovSequencer(v)
 	base := offset
@@ -486,9 +373,6 @@ func (m *Sequencer) Size() (n int) {
 	}
 	l = m.Metadata.Size()
 	n += 1 + l + sovSequencer(uint64(l))
-	if m.Jailed {
-		n += 2
-	}
 	if m.Proposer {
 		n += 2
 	}
@@ -501,30 +385,21 @@ func (m *Sequencer) Size() (n int) {
 			n += 1 + l + sovSequencer(uint64(l))
 		}
 	}
-	if m.UnbondRequestHeight != 0 {
-		n += 1 + sovSequencer(uint64(m.UnbondRequestHeight))
-	}
-	l = github_com_cosmos_gogoproto_types.SizeOfStdTime(m.UnbondTime)
-	n += 1 + l + sovSequencer(uint64(l))
 	l = github_com_cosmos_gogoproto_types.SizeOfStdTime(m.NoticePeriodTime)
 	n += 1 + l + sovSequencer(uint64(l))
-	return n
-}
-
-func (m *BondReduction) Size() (n int) {
-	if m == nil {
-		return 0
-	}
-	var l int
-	_ = l
-	l = len(m.SequencerAddress)
+	l = len(m.RewardAddr)
 	if l > 0 {
 		n += 1 + l + sovSequencer(uint64(l))
 	}
-	l = m.DecreaseBondAmount.Size()
-	n += 1 + l + sovSequencer(uint64(l))
-	l = github_com_cosmos_gogoproto_types.SizeOfStdTime(m.DecreaseBondTime)
-	n += 1 + l + sovSequencer(uint64(l))
+	if len(m.WhitelistedRelayers) > 0 {
+		for _, s := range m.WhitelistedRelayers {
+			l = len(s)
+			n += 1 + l + sovSequencer(uint64(l))
+		}
+	}
+	if m.OptedIn {
+		n += 2
+	}
 	return n
 }
 
@@ -696,26 +571,6 @@ func (m *Sequencer) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
-		case 5:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Jailed", wireType)
-			}
-			var v int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowSequencer
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				v |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			m.Jailed = bool(v != 0)
 		case 6:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Proposer", wireType)
@@ -789,58 +644,6 @@ func (m *Sequencer) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
-		case 9:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field UnbondRequestHeight", wireType)
-			}
-			m.UnbondRequestHeight = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowSequencer
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				m.UnbondRequestHeight |= int64(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-		case 10:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field UnbondTime", wireType)
-			}
-			var msglen int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowSequencer
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				msglen |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			if msglen < 0 {
-				return ErrInvalidLengthSequencer
-			}
-			postIndex := iNdEx + msglen
-			if postIndex < 0 {
-				return ErrInvalidLengthSequencer
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			if err := github_com_cosmos_gogoproto_types.StdTimeUnmarshal(&m.UnbondTime, dAtA[iNdEx:postIndex]); err != nil {
-				return err
-			}
-			iNdEx = postIndex
 		case 11:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field NoticePeriodTime", wireType)
@@ -874,59 +677,9 @@ func (m *Sequencer) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
-		default:
-			iNdEx = preIndex
-			skippy, err := skipSequencer(dAtA[iNdEx:])
-			if err != nil {
-				return err
-			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
-				return ErrInvalidLengthSequencer
-			}
-			if (iNdEx + skippy) > l {
-				return io.ErrUnexpectedEOF
-			}
-			iNdEx += skippy
-		}
-	}
-
-	if iNdEx > l {
-		return io.ErrUnexpectedEOF
-	}
-	return nil
-}
-func (m *BondReduction) Unmarshal(dAtA []byte) error {
-	l := len(dAtA)
-	iNdEx := 0
-	for iNdEx < l {
-		preIndex := iNdEx
-		var wire uint64
-		for shift := uint(0); ; shift += 7 {
-			if shift >= 64 {
-				return ErrIntOverflowSequencer
-			}
-			if iNdEx >= l {
-				return io.ErrUnexpectedEOF
-			}
-			b := dAtA[iNdEx]
-			iNdEx++
-			wire |= uint64(b&0x7F) << shift
-			if b < 0x80 {
-				break
-			}
-		}
-		fieldNum := int32(wire >> 3)
-		wireType := int(wire & 0x7)
-		if wireType == 4 {
-			return fmt.Errorf("proto: BondReduction: wiretype end group for non-group")
-		}
-		if fieldNum <= 0 {
-			return fmt.Errorf("proto: BondReduction: illegal tag %d (wire type %d)", fieldNum, wire)
-		}
-		switch fieldNum {
-		case 1:
+		case 12:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field SequencerAddress", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field RewardAddr", wireType)
 			}
 			var stringLen uint64
 			for shift := uint(0); ; shift += 7 {
@@ -954,13 +707,13 @@ func (m *BondReduction) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.SequencerAddress = string(dAtA[iNdEx:postIndex])
+			m.RewardAddr = string(dAtA[iNdEx:postIndex])
 			iNdEx = postIndex
-		case 2:
+		case 13:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field DecreaseBondAmount", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field WhitelistedRelayers", wireType)
 			}
-			var msglen int
+			var stringLen uint64
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowSequencer
@@ -970,30 +723,29 @@ func (m *BondReduction) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				msglen |= int(b&0x7F) << shift
+				stringLen |= uint64(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			if msglen < 0 {
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
 				return ErrInvalidLengthSequencer
 			}
-			postIndex := iNdEx + msglen
+			postIndex := iNdEx + intStringLen
 			if postIndex < 0 {
 				return ErrInvalidLengthSequencer
 			}
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if err := m.DecreaseBondAmount.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
-				return err
-			}
+			m.WhitelistedRelayers = append(m.WhitelistedRelayers, string(dAtA[iNdEx:postIndex]))
 			iNdEx = postIndex
-		case 3:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field DecreaseBondTime", wireType)
+		case 14:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field OptedIn", wireType)
 			}
-			var msglen int
+			var v int
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowSequencer
@@ -1003,25 +755,12 @@ func (m *BondReduction) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				msglen |= int(b&0x7F) << shift
+				v |= int(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			if msglen < 0 {
-				return ErrInvalidLengthSequencer
-			}
-			postIndex := iNdEx + msglen
-			if postIndex < 0 {
-				return ErrInvalidLengthSequencer
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			if err := github_com_cosmos_gogoproto_types.StdTimeUnmarshal(&m.DecreaseBondTime, dAtA[iNdEx:postIndex]); err != nil {
-				return err
-			}
-			iNdEx = postIndex
+			m.OptedIn = bool(v != 0)
 		default:
 			iNdEx = preIndex
 			skippy, err := skipSequencer(dAtA[iNdEx:])

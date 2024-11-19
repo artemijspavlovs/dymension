@@ -1,8 +1,6 @@
 package denommetadata
 
 import (
-	. "slices"
-
 	errorsmod "cosmossdk.io/errors"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	errortypes "github.com/cosmos/cosmos-sdk/types/errors"
@@ -108,6 +106,7 @@ func (im IBCModule) OnRecvPacket(
 }
 
 // OnAcknowledgementPacket adds the token metadata to the rollapp if it doesn't exist
+// It marks the completion of the denom metadata registration process on the rollapp
 func (im IBCModule) OnAcknowledgementPacket(
 	ctx sdk.Context,
 	packet channeltypes.Packet,
@@ -148,11 +147,15 @@ func (im IBCModule) OnAcknowledgementPacket(
 		return gerrc.ErrNotFound
 	}
 
-	if !Contains(rollapp.RegisteredDenoms, dm.Base) {
+	has, err := im.rollappKeeper.HasRegisteredDenom(ctx, rollapp.RollappId, dm.Base)
+	if err != nil {
+		return errorsmod.Wrapf(errortypes.ErrKeyNotFound, "check if rollapp has registered denom: %s", err.Error())
+	}
+	if !has {
 		// add the new token denom base to the list of rollapp's registered denoms
-		rollapp.RegisteredDenoms = append(rollapp.RegisteredDenoms, dm.Base)
-
-		im.rollappKeeper.SetRollapp(ctx, *rollapp)
+		if err = im.rollappKeeper.SetRegisteredDenom(ctx, rollapp.RollappId, dm.Base); err != nil {
+			return errorsmod.Wrapf(errortypes.ErrKeyNotFound, "set registered denom: %s", err.Error())
+		}
 	}
 
 	return im.IBCModule.OnAcknowledgementPacket(ctx, packet, acknowledgement, relayer)
@@ -229,7 +232,11 @@ func (m *ICS4Wrapper) SendPacket(
 	//		2. We parse the IBC denom trace into IBC denom hash and prepend it with "ibc/" to get the baseDenom
 	baseDenom := transfertypes.ParseDenomTrace(packet.Denom).IBCDenom()
 
-	if Contains(rollapp.RegisteredDenoms, baseDenom) {
+	has, err := m.rollappKeeper.HasRegisteredDenom(ctx, rollapp.RollappId, baseDenom)
+	if err != nil {
+		return 0, errorsmod.Wrapf(errortypes.ErrKeyNotFound, "check if rollapp has registered denom: %s", err.Error())
+	}
+	if has {
 		return m.ICS4Wrapper.SendPacket(ctx, chanCap, sourcePort, sourceChannel, timeoutHeight, timeoutTimestamp, data)
 	}
 

@@ -12,8 +12,8 @@ import (
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
-
 	"github.com/dymensionxyz/gerr-cosmos/gerrc"
+	"github.com/dymensionxyz/sdk-utils/utils/uevent"
 
 	appparams "github.com/dymensionxyz/dymension/v3/app/params"
 	"github.com/dymensionxyz/dymension/v3/x/iro/types"
@@ -138,7 +138,7 @@ func (k Keeper) CreatePlan(ctx sdk.Context, allocatedAmount math.Int, start, pre
 	k.SetPlan(ctx, plan)
 
 	// Emit event
-	err = ctx.EventManager().EmitTypedEvent(&types.EventNewIROPlan{
+	err = uevent.EmitTypedEvent(ctx, &types.EventNewIROPlan{
 		Creator:   rollapp.Owner,
 		PlanId:    fmt.Sprintf("%d", plan.Id),
 		RollappId: rollapp.RollappId,
@@ -162,8 +162,8 @@ func (k Keeper) CreateModuleAccountForPlan(ctx sdk.Context, plan types.Plan) (au
 
 // MintAllocation mints the allocated amount and registers the denom in the bank denom metadata store
 func (k Keeper) MintAllocation(ctx sdk.Context, allocatedAmount math.Int, rollappId, rollappTokenSymbol string, exponent uint64) (sdk.Coin, error) {
-	baseDenom := fmt.Sprintf("%s_%s", types.IROTokenPrefix, rollappId)
-	displayDenom := fmt.Sprintf("%s_%s", types.IROTokenPrefix, rollappTokenSymbol)
+	baseDenom := types.IRODenom(rollappId)
+	displayDenom := types.IRODenom(rollappTokenSymbol)
 	metadata := banktypes.Metadata{
 		Description: fmt.Sprintf("Future token for rollapp %s", rollappId),
 		DenomUnits: []*banktypes.DenomUnit{

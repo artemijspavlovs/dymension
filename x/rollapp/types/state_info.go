@@ -19,6 +19,7 @@ func NewStateInfo(
 	height uint64,
 	BDs BlockDescriptors,
 	createdAt time.Time,
+	nextProposer string,
 ) *StateInfo {
 	stateInfoIndex := StateInfoIndex{RollappId: rollappId, Index: newIndex}
 	status := common.Status_PENDING
@@ -32,6 +33,7 @@ func NewStateInfo(
 		Status:         status,
 		BDs:            BDs,
 		CreatedAt:      createdAt,
+		NextProposer:   nextProposer,
 	}
 }
 
@@ -44,7 +46,10 @@ func (s *StateInfo) GetIndex() StateInfoIndex {
 }
 
 func (s *StateInfo) GetLatestHeight() uint64 {
-	return s.StartHeight + s.NumBlocks - 1
+	if s.StartHeight+s.NumBlocks > 0 {
+		return s.StartHeight + s.NumBlocks - 1
+	}
+	return 0
 }
 
 func (s *StateInfo) ContainsHeight(height uint64) bool {

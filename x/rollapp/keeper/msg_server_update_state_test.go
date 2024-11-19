@@ -6,7 +6,6 @@ import (
 	abci "github.com/cometbft/cometbft/abci/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/query"
-	"github.com/dymensionxyz/gerr-cosmos/gerrc"
 	"github.com/dymensionxyz/sdk-utils/utils/urand"
 
 	"github.com/dymensionxyz/dymension/v3/testutil/sample"
@@ -66,10 +65,11 @@ func (suite *RollappTestSuite) TestUpdateState() {
 		suite.Require().EqualValues(true, found)
 
 		// verify finalization queue
-		expectedFinalizationQueue, _ := suite.App.RollappKeeper.GetBlockHeightToFinalizationQueue(suite.Ctx, expectedStateInfo.CreationHeight)
+		expectedFinalizationQueue, _ := suite.App.RollappKeeper.GetFinalizationQueue(suite.Ctx, expectedStateInfo.CreationHeight, rollappId)
 		suite.Require().EqualValues(expectedFinalizationQueue, types.BlockHeightToFinalizationQueue{
 			CreationHeight:    expectedStateInfo.CreationHeight,
 			FinalizationQueue: []types.StateInfoIndex{latestStateInfoIndex},
+			RollappId:         rollappId,
 		}, "finalization queue", "i", i)
 
 		// update state
@@ -89,7 +89,8 @@ func (suite *RollappTestSuite) TestUpdateState() {
 		}
 
 		// check finalization status change
-		pendingQueues := suite.App.RollappKeeper.GetAllFinalizationQueueUntilHeightInclusive(suite.Ctx, uint64(suite.Ctx.BlockHeader().Height))
+		pendingQueues, err := suite.App.RollappKeeper.GetFinalizationQueueUntilHeightInclusive(suite.Ctx, uint64(suite.Ctx.BlockHeader().Height))
+		suite.Require().NoError(err)
 		for _, finalizationQueue := range pendingQueues {
 			stateInfo, found := suite.App.RollappKeeper.GetStateInfo(suite.Ctx, finalizationQueue.FinalizationQueue[0].RollappId, finalizationQueue.FinalizationQueue[0].Index)
 			suite.Require().True(found)
@@ -98,11 +99,11 @@ func (suite *RollappTestSuite) TestUpdateState() {
 	}
 }
 
-func (s *RollappTestSuite) TestUpdateStateVulnerableRollapp() {
+func (s *RollappTestSuite) TestUpdateStateObsoleteRollapp() {
 	const (
-		raName               = "rollapptest_1-1"
-		nonVulnerableVersion = "non_vulnerable_version"
-		vulnerableVersion    = "vulnerable_version"
+		raName             = "rollapptest_1-1"
+		nonObsoleteVersion = 2
+		obsoleteVersion    = 1
 	)
 
 	// create a rollapp
@@ -110,51 +111,21 @@ func (s *RollappTestSuite) TestUpdateStateVulnerableRollapp() {
 	// create a sequencer
 	proposer := s.CreateDefaultSequencer(s.Ctx, raName)
 
-	// create the initial state update with non-vulnerable version
-	expectedLastHeight, err := s.PostStateUpdateWithDRSVersion(s.Ctx, raName, proposer, 1, uint64(3), nonVulnerableVersion)
+	// create the initial state update with non-obsolete version
+	expectedNextHeight, err := s.PostStateUpdateWithDRSVersion(s.Ctx, raName, proposer, 1, uint64(3), nonObsoleteVersion)
 	s.Require().Nil(err)
 
 	// check the rollapp's last height
 	actualLastHeight := s.GetRollappLastHeight(raName)
-	s.Require().Equal(expectedLastHeight, actualLastHeight)
+	s.Require().Equal(expectedNextHeight-1, actualLastHeight)
 
-	// mark a DRS version as vulnerable. note that the last state update of the rollapp wasn't vulnerable
-	vulnNum, err := s.App.RollappKeeper.MarkVulnerableRollapps(s.Ctx, []string{vulnerableVersion})
-	s.Require().NoError(err)
-	s.Require().Equal(0, vulnNum)
-
-	// check the version is vulnerable
-	ok := s.App.RollappKeeper.IsDRSVersionVulnerable(s.Ctx, vulnerableVersion)
-	s.Require().True(ok)
-
-	// the rollapp is not vulnerable at this step
-	ok = s.IsRollappVulnerable(raName)
-	s.Require().False(ok)
-
-	// create a new update using the vulnerable version
-	_, err = s.PostStateUpdateWithDRSVersion(s.Ctx, raName, proposer, 1, uint64(3), vulnerableVersion)
+	// mark a DRS version as obsolete
+	err = s.App.RollappKeeper.SetObsoleteDRSVersion(s.Ctx, obsoleteVersion)
 	s.Require().NoError(err)
 
-	// the rollapp now is vulnerable
-	ok = s.IsRollappVulnerable(raName)
-	s.Require().True(ok)
-
-	// the rollapp state is not updated
-	actualLastHeight = s.GetRollappLastHeight(raName)
-	s.Require().Equal(expectedLastHeight, actualLastHeight)
-
-	// create one more update using the vulnerable version. this time we expect an error.
-	_, err = s.PostStateUpdateWithDRSVersion(s.Ctx, raName, proposer, 1, uint64(3), vulnerableVersion)
+	// create a new update using the obsolete version
+	_, err = s.PostStateUpdateWithDRSVersion(s.Ctx, raName, proposer, expectedNextHeight, uint64(3), obsoleteVersion)
 	s.Require().Error(err)
-	s.Assert().ErrorIs(err, gerrc.ErrFailedPrecondition)
-
-	// the rollapp is still vulnerable
-	ok = s.IsRollappVulnerable(raName)
-	s.Require().True(ok)
-
-	// the rollapp state is still not updated
-	actualLastHeight = s.GetRollappLastHeight(raName)
-	s.Require().Equal(expectedLastHeight, actualLastHeight)
 }
 
 func (suite *RollappTestSuite) TestUpdateStateUnknownRollappId() {
@@ -167,7 +138,7 @@ func (suite *RollappTestSuite) TestUpdateStateUnknownSequencer() {
 
 	// update state
 	_, err := suite.PostStateUpdate(suite.Ctx, rollappId, bob, 1, uint64(3))
-	suite.ErrorIs(err, sequencertypes.ErrNotActiveSequencer)
+	suite.ErrorIs(err, sequencertypes.ErrNotProposer)
 }
 
 func (suite *RollappTestSuite) TestUpdateStateSequencerRollappMismatch() {
@@ -178,7 +149,7 @@ func (suite *RollappTestSuite) TestUpdateStateSequencerRollappMismatch() {
 
 	// update state from proposer of rollapp2
 	_, err := suite.PostStateUpdate(suite.Ctx, rollappId, seq_2, 1, uint64(3))
-	suite.ErrorIs(err, sequencertypes.ErrNotActiveSequencer)
+	suite.ErrorIs(err, sequencertypes.ErrNotProposer)
 }
 
 func (suite *RollappTestSuite) TestUpdateStateErrLogicUnpermissioned() {
@@ -215,7 +186,7 @@ func (suite *RollappTestSuite) TestUpdateStateErrLogicUnpermissioned() {
 	}
 
 	_, err := suite.msgServer.UpdateState(goCtx, &updateState)
-	suite.ErrorIs(err, sequencertypes.ErrNotActiveSequencer)
+	suite.ErrorIs(err, sequencertypes.ErrNotProposer)
 }
 
 func (suite *RollappTestSuite) TestFirstUpdateStateGenesisHeightGreaterThanZero() {
@@ -289,7 +260,7 @@ func (suite *RollappTestSuite) TestUpdateStateErrNotActiveSequencer() {
 
 	// update state from bob
 	_, err := suite.PostStateUpdate(suite.Ctx, rollappId, addr2, 1, uint64(3))
-	suite.ErrorIs(err, sequencertypes.ErrNotActiveSequencer)
+	suite.ErrorIs(err, sequencertypes.ErrNotProposer)
 }
 
 func (suite *RollappTestSuite) TestUpdateStateDowngradeTimestamp() {

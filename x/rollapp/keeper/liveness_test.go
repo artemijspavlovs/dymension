@@ -14,44 +14,41 @@ import (
 	keepertest "github.com/dymensionxyz/dymension/v3/testutil/keeper"
 	"github.com/dymensionxyz/dymension/v3/x/rollapp/keeper"
 	"github.com/dymensionxyz/dymension/v3/x/rollapp/types"
+	seqtypes "github.com/dymensionxyz/dymension/v3/x/sequencer/types"
 )
 
 func TestLivenessArithmetic(t *testing.T) {
 	t.Run("simple case", func(t *testing.T) {
-		hEvent, _ := keeper.NextSlashOrJailHeight(
+		hEvent := keeper.NextSlashHeight(
 			8,
 			4,
-			1000,
 			0,
 			0,
 		)
 		require.Equal(t, 8, int(hEvent))
 	})
 	t.Run("almost at the interval", func(t *testing.T) {
-		hEvent, _ := keeper.NextSlashOrJailHeight(
+		hEvent := keeper.NextSlashHeight(
 			8,
 			4,
-			1000,
 			7,
 			0,
 		)
 		require.Equal(t, 8, int(hEvent))
 	})
 	t.Run("do not schedule for next height", func(t *testing.T) {
-		hEvent, _ := keeper.NextSlashOrJailHeight(
+		hEvent := keeper.NextSlashHeight(
 			8,
 			4,
-			1000,
 			8,
 			0,
 		)
 		require.Equal(t, 12, int(hEvent))
 	})
 	t.Run("do not schedule for next height", func(t *testing.T) {
-		hEvent, _ := keeper.NextSlashOrJailHeight(
+		hEvent := keeper.NextSlashHeight(
 			8,
 			4,
-			1000,
 			12,
 			0,
 		)
@@ -66,7 +63,6 @@ func TestLivenessEventsStorage(t *testing.T) {
 
 	rollapps := rapid.StringMatching("^[a-zA-Z0-9]{1,10}$")
 	heights := rapid.Int64Range(0, 10)
-	isJail := rapid.Bool()
 	rapid.Check(t, func(r *rapid.T) {
 		k, ctx := keepertest.RollappKeeper(t)
 		model := make(map[string]types.LivenessEvent) // model actual sdk storage
@@ -78,7 +74,6 @@ func TestLivenessEventsStorage(t *testing.T) {
 				e := types.LivenessEvent{
 					RollappId: rollapps.Draw(r, "rollapp"),
 					HubHeight: heights.Draw(r, "h"),
-					IsJail:    isJail.Draw(r, "jail"),
 				}
 				k.PutLivenessEvent(ctx, e)
 				model[modelKey(e)] = e
@@ -90,7 +85,6 @@ func TestLivenessEventsStorage(t *testing.T) {
 				}
 				k.DelLivenessEvents(ctx, e.HubHeight, e.RollappId)
 				delete(model, modelKey(e))
-				e.IsJail = true
 				delete(model, modelKey(e))
 			},
 			"iterHeight": func(r *rapid.T) {
@@ -149,11 +143,7 @@ func (suite *RollappTestSuite) TestLivenessFlow() {
 					}
 					elapsed := uint64(h - lastUpdate)
 					p := suite.keeper().GetParams(suite.Ctx)
-					if elapsed <= p.LivenessJailBlocks {
-						require.Zero(r, tracker.jails[ra], "expect not jailed")
-					} else {
-						require.NotZero(r, tracker.jails[ra], "expect jailed")
-					}
+
 					if elapsed <= p.LivenessSlashBlocks {
 						l := tracker.slashes[ra]
 						require.Zero(r, l, "expect not slashed")
@@ -172,6 +162,7 @@ func (suite *RollappTestSuite) TestLivenessFlow() {
 				if !rollappIsDown[raID] {
 					ra := suite.keeper().MustGetRollapp(suite.Ctx, raID)
 					suite.keeper().IndicateLiveness(suite.Ctx, &ra)
+					suite.keeper().SetRollapp(suite.Ctx, ra)
 					hLastUpdate[raID] = suite.Ctx.BlockHeight()
 					tracker.clear(raID)
 				}
@@ -187,12 +178,20 @@ func (suite *RollappTestSuite) TestLivenessFlow() {
 
 type livenessMockSequencerKeeper struct {
 	slashes map[string]int
-	jails   map[string]int
+}
+
+// GetSuccessor implements keeper.SequencerKeeper.
+func (l livenessMockSequencerKeeper) GetSuccessor(ctx sdk.Context, rollapp string) seqtypes.Sequencer {
+	panic("unimplemented")
+}
+
+func (l livenessMockSequencerKeeper) PunishSequencer(ctx sdk.Context, seqAddr string, rewardee *sdk.AccAddress) error {
+	// TODO implement me
+	panic("implement me")
 }
 
 func newLivenessMockSequencerKeeper() livenessMockSequencerKeeper {
 	return livenessMockSequencerKeeper{
-		make(map[string]int),
 		make(map[string]int),
 	}
 }
@@ -202,12 +201,10 @@ func (l livenessMockSequencerKeeper) SlashLiveness(ctx sdk.Context, rollappID st
 	return nil
 }
 
-func (l livenessMockSequencerKeeper) JailLiveness(ctx sdk.Context, rollappID string) error {
-	l.jails[rollappID]++
-	return nil
+func (l livenessMockSequencerKeeper) GetProposer(ctx sdk.Context, rollappId string) seqtypes.Sequencer {
+	return seqtypes.Sequencer{}
 }
 
 func (l livenessMockSequencerKeeper) clear(rollappID string) {
 	delete(l.slashes, rollappID)
-	delete(l.jails, rollappID)
 }

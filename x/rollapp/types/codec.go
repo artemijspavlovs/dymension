@@ -6,8 +6,6 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/msgservice"
 	authzcodec "github.com/cosmos/cosmos-sdk/x/authz/codec"
-
-	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types/v1beta1"
 )
 
 func RegisterCodec(cdc *codec.LegacyAmino) {
@@ -18,6 +16,8 @@ func RegisterCodec(cdc *codec.LegacyAmino) {
 	cdc.RegisterConcrete(&MsgAddApp{}, "rollapp/AddApp", nil)
 	cdc.RegisterConcrete(&MsgUpdateApp{}, "rollapp/UpdateApp", nil)
 	cdc.RegisterConcrete(&MsgRemoveApp{}, "rollapp/RemoveApp", nil)
+	cdc.RegisterConcrete(&MsgRollappFraudProposal{}, "rollapp/RollappFraudProposal", nil)
+	cdc.RegisterConcrete(&MsgMarkObsoleteRollapps{}, "rollapp/MarkObsoleteRollapps", nil)
 }
 
 func RegisterInterfaces(registry cdctypes.InterfaceRegistry) {
@@ -29,8 +29,9 @@ func RegisterInterfaces(registry cdctypes.InterfaceRegistry) {
 		&MsgAddApp{},
 		&MsgUpdateApp{},
 		&MsgRemoveApp{},
+		&MsgRollappFraudProposal{},
+		&MsgMarkObsoleteRollapps{},
 	)
-	registry.RegisterImplementations((*govtypes.Content)(nil), &SubmitFraudProposal{})
 	msgservice.RegisterMsgServiceDesc(registry, &_Msg_serviceDesc)
 }
 

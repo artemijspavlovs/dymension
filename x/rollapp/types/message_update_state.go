@@ -5,14 +5,17 @@ import (
 
 	errorsmod "cosmossdk.io/errors"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/cosmos/cosmos-sdk/x/auth/migrations/legacytx"
 )
 
 const (
 	TypeMsgUpdateState = "update_state"
-	DRSVersionLength   = 40
 )
 
-var _ sdk.Msg = &MsgUpdateState{}
+var (
+	_ sdk.Msg            = &MsgUpdateState{}
+	_ legacytx.LegacyMsg = &MsgUpdateState{}
+)
 
 func NewMsgUpdateState(creator, rollappId, dAPath string, startHeight, numBlocks uint64, bDs *BlockDescriptors) *MsgUpdateState {
 	return &MsgUpdateState{
@@ -74,11 +77,10 @@ func (msg *MsgUpdateState) ValidateBasic() error {
 	// check that the blocks are sequential by height
 	for bdIndex := uint64(0); bdIndex < msg.NumBlocks; bdIndex += 1 {
 
-		// TODO: by now DRS version can be empty, but it will be deprecated
-		//  https://github.com/dymensionxyz/dymension/issues/1233
-		if msg.BDs.BD[bdIndex].DrsVersion != "" && len(msg.BDs.BD[bdIndex].DrsVersion) != DRSVersionLength {
-			return ErrInvalidDRSVersion
-		}
+		// Pre 3D rollapps will use zero DRS until they upgrade. Post 3D rollapps
+		// should use a non-zero version. We rely on other fraud mechanisms
+		// to catch that if it's wrong. So we don't check DRS.
+
 		if msg.BDs.BD[bdIndex].Height != msg.StartHeight+bdIndex {
 			return ErrInvalidBlockSequence
 		}

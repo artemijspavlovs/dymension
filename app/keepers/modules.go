@@ -98,7 +98,6 @@ import (
 	lightclientmodule "github.com/dymensionxyz/dymension/v3/x/lightclient"
 	lightclientmoduletypes "github.com/dymensionxyz/dymension/v3/x/lightclient/types"
 	"github.com/dymensionxyz/dymension/v3/x/rollapp"
-	rollappmoduleclient "github.com/dymensionxyz/dymension/v3/x/rollapp/client"
 	rollappmoduletypes "github.com/dymensionxyz/dymension/v3/x/rollapp/types"
 	"github.com/dymensionxyz/dymension/v3/x/sequencer"
 	sequencertypes "github.com/dymensionxyz/dymension/v3/x/sequencer/types"
@@ -130,7 +129,6 @@ var ModuleBasics = module.NewBasicManager(
 		streamermoduleclient.TerminateStreamHandler,
 		streamermoduleclient.ReplaceStreamHandler,
 		streamermoduleclient.UpdateStreamHandler,
-		rollappmoduleclient.SubmitFraudHandler,
 		denommetadatamoduleclient.CreateDenomMetadataHandler,
 		denommetadatamoduleclient.UpdateDenomMetadataHandler,
 		dymnsmoduleclient.MigrateChainIdsProposalHandler,
@@ -205,7 +203,8 @@ func (a *AppKeepers) SetupModules(
 		ibctransfer.NewAppModule(a.TransferKeeper),
 		rollappmodule.NewAppModule(appCodec, a.RollappKeeper, a.AccountKeeper, a.BankKeeper),
 		iro.NewAppModule(appCodec, *a.IROKeeper),
-		sequencermodule.NewAppModule(appCodec, a.SequencerKeeper, a.AccountKeeper, a.BankKeeper, a.GetSubspace(sequencertypes.ModuleName)),
+
+		sequencermodule.NewAppModule(appCodec, a.SequencerKeeper, a.AccountKeeper, a.BankKeeper),
 		sponsorship.NewAppModule(a.SponsorshipKeeper),
 		streamermodule.NewAppModule(a.StreamerKeeper, a.AccountKeeper, a.BankKeeper, a.EpochsKeeper),
 		delayedackmodule.NewAppModule(appCodec, a.DelayedAckKeeper, a.delayedAckMiddleware),
@@ -268,8 +267,8 @@ var maccPerms = map[string][]string{
 }
 
 var BeginBlockers = []string{
-	epochstypes.ModuleName,
 	upgradetypes.ModuleName,
+	epochstypes.ModuleName,
 	capabilitytypes.ModuleName,
 	minttypes.ModuleName,
 	distrtypes.ModuleName,

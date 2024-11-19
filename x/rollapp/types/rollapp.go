@@ -46,11 +46,11 @@ func NewRollapp(
 		GenesisState: RollappGenesisState{
 			TransfersEnabled: transfersEnabled,
 		},
+		Revisions: []Revision{{
+			Number:      0,
+			StartHeight: 0,
+		}},
 	}
-}
-
-func (r Rollapp) LastStateUpdateHeightIsSet() bool {
-	return r.LastStateUpdateHeight != 0
 }
 
 func (r Rollapp) ValidateBasic() error {
@@ -103,8 +103,20 @@ func (r Rollapp) GenesisInfoFieldsAreSet() bool {
 	return r.GenesisInfo.AllSet()
 }
 
-func (r Rollapp) IsVulnerable() bool {
-	return r.Frozen
+func (r Rollapp) LatestRevision() Revision {
+	if len(r.Revisions) == 0 {
+		// Revision 0 if no revisions exist.
+		// Should happen only in tests.
+		return Revision{}
+	}
+	return r.Revisions[len(r.Revisions)-1]
+}
+
+func (r *Rollapp) BumpRevision(nextRevisionStartHeight uint64) {
+	r.Revisions = append(r.Revisions, Revision{
+		Number:      r.LatestRevision().Number + 1,
+		StartHeight: nextRevisionStartHeight,
+	})
 }
 
 func validateInitialSequencer(initialSequencer string) error {

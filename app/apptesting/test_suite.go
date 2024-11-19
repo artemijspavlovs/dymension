@@ -44,7 +44,6 @@ func (s *KeeperTestHelper) CreateDefaultRollappAndProposer() (string, string) {
 	return rollappId, proposer
 }
 
-// creates a rollapp and return its rollappID
 func (s *KeeperTestHelper) CreateDefaultRollapp() string {
 	rollappId := urand.RollappID()
 	s.CreateRollappByName(rollappId)
@@ -79,7 +78,7 @@ func (s *KeeperTestHelper) CreateRollappByName(name string) {
 
 	s.FundForAliasRegistration(msgCreateRollapp)
 
-	msgServer := rollappkeeper.NewMsgServerImpl(*s.App.RollappKeeper)
+	msgServer := rollappkeeper.NewMsgServerImpl(s.App.RollappKeeper)
 	_, err := msgServer.CreateRollapp(s.Ctx, &msgCreateRollapp)
 	s.Require().NoError(err)
 }
@@ -117,10 +116,10 @@ func (s *KeeperTestHelper) CreateSequencerByPubkey(ctx sdk.Context, rollappId st
 }
 
 func (s *KeeperTestHelper) PostStateUpdate(ctx sdk.Context, rollappId, seqAddr string, startHeight, numOfBlocks uint64) (lastHeight uint64, err error) {
-	return s.PostStateUpdateWithDRSVersion(ctx, rollappId, seqAddr, startHeight, numOfBlocks, "")
+	return s.PostStateUpdateWithDRSVersion(ctx, rollappId, seqAddr, startHeight, numOfBlocks, 1)
 }
 
-func (s *KeeperTestHelper) PostStateUpdateWithDRSVersion(ctx sdk.Context, rollappId, seqAddr string, startHeight, numOfBlocks uint64, drsVersion string) (lastHeight uint64, err error) {
+func (s *KeeperTestHelper) PostStateUpdateWithDRSVersion(ctx sdk.Context, rollappId, seqAddr string, startHeight, numOfBlocks uint64, drsVersion uint32) (lastHeight uint64, err error) {
 	var bds rollapptypes.BlockDescriptors
 	bds.BD = make([]rollapptypes.BlockDescriptor, numOfBlocks)
 	for k := uint64(0); k < numOfBlocks; k++ {
@@ -136,7 +135,7 @@ func (s *KeeperTestHelper) PostStateUpdateWithDRSVersion(ctx sdk.Context, rollap
 		BDs:         bds,
 		Last:        false,
 	}
-	msgServer := rollappkeeper.NewMsgServerImpl(*s.App.RollappKeeper)
+	msgServer := rollappkeeper.NewMsgServerImpl(s.App.RollappKeeper)
 	_, err = msgServer.UpdateState(ctx, &updateState)
 	return startHeight + numOfBlocks, err
 }
@@ -183,13 +182,12 @@ func FundForAliasRegistration(
 	)
 }
 
-func (s *KeeperTestHelper) FinalizeAllPendingPackets(rollappID, receiver string) int {
+func (s *KeeperTestHelper) FinalizeAllPendingPackets(address string) int {
 	s.T().Helper()
-	// Query all pending packets by receiver
+	// Query all pending packets by address
 	querier := delayedackkeeper.NewQuerier(s.App.DelayedAckKeeper)
-	resp, err := querier.GetPendingPacketsByReceiver(s.Ctx, &delayedacktypes.QueryPendingPacketsByReceiverRequest{
-		RollappId: rollappID,
-		Receiver:  receiver,
+	resp, err := querier.GetPendingPacketsByAddress(s.Ctx, &delayedacktypes.QueryPendingPacketsByAddressRequest{
+		Address: address,
 	})
 	s.Require().NoError(err)
 	// Finalize all packets and return the num of finalized
